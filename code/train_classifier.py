@@ -226,7 +226,7 @@ def train_classifier(args):
         print(f"    Class {i}: {class_acc:.2f}%")
     
     # Generate t-SNE plot for the latent space
-    plot_tsne(encoder, test_loader, device)
+    plot_tsne(encoder, test_loader, device, dataset_name=f"{dataset_name.lower()}_classifier")
     
     print(f"[CLASSIFIER] {dataset_name} - Training completed!")
     print(f"[CLASSIFIER] {dataset_name} - Best validation accuracy: {best_val_acc:.2f}%")

@@ -164,7 +164,7 @@ def train_autoencoder(args):
     plt.savefig(f"results/{'mnist' if args.mnist else 'cifar10'}_ae_curves.png")
     
     # Generate t-SNE plot for the latent space
-    plot_tsne(model.encoder, test_loader, device)
+    plot_tsne(model.encoder, test_loader, device, dataset_name=dataset_name.lower())
     
     print(f"[AUTOENCODER] {dataset_name} - Training completed!")
     print(f"[AUTOENCODER] {dataset_name} - Final validation loss: {val_losses[-1]:.6f}, Recon score: {val_recon_scores[-1]:.2f}%")
