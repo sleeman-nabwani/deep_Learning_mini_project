@@ -43,26 +43,48 @@ if __name__ == "__main__":
     os.makedirs('results', exist_ok=True)
     
     # Select appropriate transform based on dataset
+    dataset_name = "MNIST" if args.mnist else "CIFAR10"
+    
+    print(f"=== {dataset_name} AUTOENCODER TRAINING ===")
+    print(f"Dataset: {dataset_name}")
+    print(f"Device: {args.device}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Latent dimension: {args.latent_dim}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Data path: {args.data_path}")
+    print(f"Self-supervised mode: {args.self_supervised}")
+    print(f"Train classifier: {args.train_classifier}")
+    print("="*40)
+    
+    # Select appropriate transform based on dataset
     if args.mnist:
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5], std=[0.5])
         ])
-        print("Using MNIST dataset")
     else:
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
-        print("Using CIFAR10 dataset")
     
     # First train the autoencoder in self-supervised mode
     if args.self_supervised:
-        print("Training autoencoder in self-supervised mode...")
-        train_autoencoder.train_autoencoder(args)
+        print("\n=== STARTING AUTOENCODER TRAINING ===")
+        autoencoder = train_autoencoder.train_autoencoder(args)
+        print("=== AUTOENCODER TRAINING COMPLETE ===\n")
         
     # Then train the classifier on top of the pretrained encoder if requested
     if args.train_classifier:
-        print("Training classifier on top of pretrained encoder...")
-        train_classifier.train_classifier(args)
+        print("\n=== STARTING CLASSIFIER TRAINING ===")
+        classifier = train_classifier.train_classifier(args)
+        print("=== CLASSIFIER TRAINING COMPLETE ===\n")
+    
+    print(f"\n=== ALL TRAINING COMPLETED FOR {dataset_name} ===")
+    if args.self_supervised and args.train_classifier:
+        print("Both autoencoder and classifier were trained successfully.")
+    elif args.self_supervised:
+        print("Only autoencoder was trained. Run with --train-classifier to train a classifier.")
+    elif args.train_classifier:
+        print("Only classifier was trained using a pre-trained encoder.")
 

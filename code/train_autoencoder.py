@@ -9,6 +9,7 @@ import os
 import argparse
 from models import MNISTAutoencoder, CIFAR10Autoencoder
 from utils import plot_tsne
+import torch.nn.functional as F
 
 def train_autoencoder(args):
     # Set device
@@ -23,6 +24,7 @@ def train_autoencoder(args):
         dataset = datasets.MNIST(root=args.data_path, train=True, download=True, transform=transform)
         test_dataset = datasets.MNIST(root=args.data_path, train=False, download=True, transform=transform)
         model = MNISTAutoencoder(args.latent_dim).to(device)
+        dataset_name = "MNIST"
     else:
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -31,6 +33,7 @@ def train_autoencoder(args):
         dataset = datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=transform)
         test_dataset = datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=transform)
         model = CIFAR10Autoencoder(args.latent_dim).to(device)
+        dataset_name = "CIFAR10"
     
     # Split training dataset into train and validation
     train_size = int(0.8 * len(dataset))
@@ -50,14 +53,19 @@ def train_autoencoder(args):
     os.makedirs('results', exist_ok=True)
     train_losses = []
     val_losses = []
+    train_recon_scores = []
+    val_recon_scores = []
     best_val_loss = float('inf')
     
-    print(f"Starting training for {'MNIST' if args.mnist else 'CIFAR10'} autoencoder...")
+    print(f"[AUTOENCODER] Starting training for {dataset_name} dataset with latent dim={args.latent_dim}")
+    print(f"[AUTOENCODER] Training on {device} with batch size {args.batch_size} for {args.epochs} epochs")
     
     for epoch in range(args.epochs):
         # Training
         model.train()
         train_loss = 0
+        train_recon_score = 0
+        
         for batch_idx, (data, _) in enumerate(train_loader):
             data = data.to(device)
             
@@ -66,6 +74,13 @@ def train_autoencoder(args):
             output = model(data)
             loss = criterion(output, data)
             
+            # Calculate reconstruction score (1 - normalized MSE as a percentage)
+            # This gives us a "reconstruction accuracy" between 0-100%
+            with torch.no_grad():
+                mse = F.mse_loss(output, data, reduction='sum').item() / (data.size(0) * data.numel() / data.size(0))
+                recon_score = 100 * (1 - min(mse, 1.0))  # Cap at 0% if MSE > 1
+                train_recon_score += recon_score
+            
             # Backward pass
             loss.backward()
             optimizer.step()
@@ -73,14 +88,18 @@ def train_autoencoder(args):
             train_loss += loss.item()
             
             if batch_idx % 100 == 0:
-                print(f"Epoch: {epoch+1}/{args.epochs}, Batch: {batch_idx}/{len(train_loader)}, Loss: {loss.item():.6f}")
+                print(f"[AUTOENCODER] {dataset_name} - Epoch: {epoch+1}/{args.epochs}, Batch: {batch_idx}/{len(train_loader)}, Loss: {loss.item():.6f}, Recon Score: {recon_score:.2f}%")
         
         train_loss /= len(train_loader)
+        train_recon_score /= len(train_loader)
         train_losses.append(train_loss)
+        train_recon_scores.append(train_recon_score)
         
         # Validation
         model.eval()
         val_loss = 0
+        val_recon_score = 0
+        
         with torch.no_grad():
             for data, _ in val_loader:
                 data = data.to(device)
@@ -88,10 +107,19 @@ def train_autoencoder(args):
                 loss = criterion(output, data)
                 val_loss += loss.item()
                 
+                # Calculate reconstruction score for validation
+                mse = F.mse_loss(output, data, reduction='sum').item() / (data.size(0) * data.numel() / data.size(0))
+                recon_score = 100 * (1 - min(mse, 1.0))
+                val_recon_score += recon_score
+                
         val_loss /= len(val_loader)
+        val_recon_score /= len(val_loader)
         val_losses.append(val_loss)
+        val_recon_scores.append(val_recon_score)
         
-        print(f"Epoch: {epoch+1}/{args.epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+        print(f"[AUTOENCODER] {dataset_name} - Epoch: {epoch+1}/{args.epochs}, "
+              f"Train Loss: {train_loss:.6f}, Train Recon Score: {train_recon_score:.2f}%, "
+              f"Val Loss: {val_loss:.6f}, Val Recon Score: {val_recon_score:.2f}%")
         
         # Save model if validation loss has decreased
         if val_loss < best_val_loss:
@@ -102,28 +130,44 @@ def train_autoencoder(args):
                 'decoder': model.decoder.state_dict(),
                 'model': model.state_dict(),
                 'epoch': epoch,
-                'val_loss': val_loss
+                'val_loss': val_loss,
+                'val_recon_score': val_recon_score
             }, os.path.join('results', model_name))
-            print(f"Saved model checkpoint with validation loss: {val_loss:.6f}")
+            print(f"[AUTOENCODER] {dataset_name} - Saved model checkpoint with validation loss: {val_loss:.6f} and recon score: {val_recon_score:.2f}%")
         
         # Visualize reconstructions every few epochs
         if (epoch + 1) % 5 == 0 or epoch == 0 or epoch == args.epochs - 1:
             visualize_reconstructions(model, test_loader, device, epoch, args.mnist)
     
     # Plot loss curves
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Training Loss')
     plt.plot(val_losses, label='Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
+    plt.title(f'{dataset_name} Autoencoder - Training and Validation Loss')
     plt.legend()
-    plt.savefig(f"results/{'mnist' if args.mnist else 'cifar10'}_loss_curve.png")
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(train_recon_scores, label='Training Recon Score')
+    plt.plot(val_recon_scores, label='Validation Recon Score')
+    plt.xlabel('Epoch')
+    plt.ylabel('Reconstruction Score (%)')
+    plt.title(f'{dataset_name} Autoencoder - Reconstruction Scores')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(f"results/{'mnist' if args.mnist else 'cifar10'}_ae_curves.png")
     
     # Generate t-SNE plot for the latent space
     plot_tsne(model.encoder, test_loader, device)
     
-    print("Training completed!")
+    print(f"[AUTOENCODER] {dataset_name} - Training completed!")
+    print(f"[AUTOENCODER] {dataset_name} - Final validation loss: {val_losses[-1]:.6f}, Recon score: {val_recon_scores[-1]:.2f}%")
+    
+    return model
 
 def visualize_reconstructions(model, dataloader, device, epoch, is_mnist):
     """Visualize original images and their reconstructions"""
