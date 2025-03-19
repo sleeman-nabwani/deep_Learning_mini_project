@@ -34,7 +34,7 @@ class MNISTDecoder(nn.Module):
         self.fc = nn.Linear(latent_dim, 128 * 4 * 4)
         self.deconv1 = nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1)  # 64x8x8
         self.deconv2 = nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1)  # 32x16x16
-        self.deconv3 = nn.ConvTranspose2d(32, 1, 3, stride=2, padding=1, output_padding=1)  # 1x32x32
+        self.deconv3 = nn.ConvTranspose2d(32, 1, 3, stride=2, padding=2, output_padding=1)  # 1x28x28
         
     def forward(self, x):
         x = self.fc(x)
@@ -42,6 +42,8 @@ class MNISTDecoder(nn.Module):
         x = F.relu(self.deconv1(x))
         x = F.relu(self.deconv2(x))
         x = torch.tanh(self.deconv3(x))  # Output in range [-1, 1] to match normalization
+        if x.size(2) != 28 or x.size(3) != 28:
+            x = F.interpolate(x, size=(28, 28), mode='bilinear', align_corners=False)
         return x
 
 class CIFAR10Encoder(nn.Module):

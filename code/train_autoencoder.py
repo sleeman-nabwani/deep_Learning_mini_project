@@ -25,6 +25,7 @@ def train_autoencoder(args):
         test_dataset = datasets.MNIST(root=args.data_path, train=False, download=True, transform=transform)
         model = MNISTAutoencoder(args.latent_dim).to(device)
         dataset_name = "MNIST"
+        img_size = 28
     else:
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -34,6 +35,7 @@ def train_autoencoder(args):
         test_dataset = datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=transform)
         model = CIFAR10Autoencoder(args.latent_dim).to(device)
         dataset_name = "CIFAR10"
+        img_size = 32
     
     # Split training dataset into train and validation
     train_size = int(0.8 * len(dataset))
