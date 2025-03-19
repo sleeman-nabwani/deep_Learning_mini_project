@@ -27,9 +27,9 @@ def train_autoencoder(args):
         dataset_name = "MNIST"
         img_size = 28
     else:
-        # Enhanced data augmentation for CIFAR10
+        # Enhanced data augmentation for CIFAR10, but more conservative for autoencoder
         train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
+            # Only horizontal flip for autoencoder to avoid extreme transformations
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])

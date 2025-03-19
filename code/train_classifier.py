@@ -30,7 +30,6 @@ def train_classifier(args):
         train_transform = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
@@ -70,19 +69,10 @@ def train_classifier(args):
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(classifier.parameters(), lr=5e-4, weight_decay=5e-4)
+    optimizer = optim.Adam(classifier.parameters(), lr=3e-4, weight_decay=1e-4)
     
-    # Learning rate scheduler - cosine annealing with warmup
-    total_steps = len(train_loader) * args.epochs
-    warmup_steps = len(train_loader) * 2  # 2 epochs of warmup
-    
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
-    
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    # Simpler learning rate scheduler - step decay
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     
     # Training loop
     os.makedirs('results', exist_ok=True)
@@ -119,7 +109,6 @@ def train_classifier(args):
             # Backward pass
             loss.backward()
             optimizer.step()
-            scheduler.step()
             
             train_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -132,10 +121,14 @@ def train_classifier(args):
                       f"Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%, "
                       f"LR: {scheduler.get_last_lr()[0]:.6f}")
         
+        # End of epoch operations
         train_loss /= len(train_loader)
         train_acc = 100. * correct / total
         train_losses.append(train_loss)
         train_accuracies.append(train_acc)
+        
+        # Step the scheduler once per epoch
+        scheduler.step()
         
         # Validation
         classifier.eval()
