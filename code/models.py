@@ -50,7 +50,6 @@ class CIFAR10Encoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(CIFAR10Encoder, self).__init__()
         # CIFAR10: 3x32x32 - Enhanced architecture for better accuracy
-        # Based on a VGG-style network with residual connections
         
         # Initial convolution
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
@@ -63,21 +62,20 @@ class CIFAR10Encoder(nn.Module):
         self.block1_bn2 = nn.BatchNorm2d(64)
         
         # Block 2
-        self.block2_conv1 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.block2_conv1 = nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2)  # stride=2 to halve spatial dimensions
         self.block2_bn1 = nn.BatchNorm2d(128)
         self.block2_conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
         self.block2_bn2 = nn.BatchNorm2d(128)
-        self.block2_downsample = nn.Conv2d(64, 128, kernel_size=1, stride=2)
+        self.block2_downsample = nn.Conv2d(64, 128, kernel_size=1, stride=2)  # Match dimensions for residual
         
         # Block 3
-        self.block3_conv1 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.block3_conv1 = nn.Conv2d(128, 256, kernel_size=3, padding=1, stride=2)  # stride=2 to halve spatial dimensions
         self.block3_bn1 = nn.BatchNorm2d(256)
         self.block3_conv2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
         self.block3_bn2 = nn.BatchNorm2d(256)
-        self.block3_downsample = nn.Conv2d(128, 256, kernel_size=1, stride=2)
+        self.block3_downsample = nn.Conv2d(128, 256, kernel_size=1, stride=2)  # Match dimensions for residual
         
         # Pooling
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d((4, 4))
         
         # FC layers
@@ -89,30 +87,28 @@ class CIFAR10Encoder(nn.Module):
         
     def forward(self, x):
         # Initial convolution
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn1(self.conv1(x)))  # 64x32x32
         
         # Block 1 with residual connection
         identity = x
         x = F.relu(self.block1_bn1(self.block1_conv1(x)))
         x = self.block1_bn2(self.block1_conv2(x))
-        x = F.relu(x + identity)
-        x = self.maxpool(x)  # 64x16x16
+        x = F.relu(x + identity)  # 64x32x32
         
-        # Block 2 with residual connection
-        identity = self.block2_downsample(x)
-        x = F.relu(self.block2_bn1(self.block2_conv1(x)))
-        x = self.block2_bn2(self.block2_conv2(x))
-        x = F.relu(x + identity)
-        x = self.maxpool(x)  # 128x8x8
+        # Block 2 with residual connection - with spatial reduction
+        identity = self.block2_downsample(x)  # 128x16x16
+        x = F.relu(self.block2_bn1(self.block2_conv1(x)))  # 128x16x16
+        x = self.block2_bn2(self.block2_conv2(x))  # 128x16x16
+        x = F.relu(x + identity)  # 128x16x16
         
-        # Block 3 with residual connection
-        identity = self.block3_downsample(x)
-        x = F.relu(self.block3_bn1(self.block3_conv1(x)))
-        x = self.block3_bn2(self.block3_conv2(x))
-        x = F.relu(x + identity)
-        x = self.maxpool(x)  # 256x4x4
+        # Block 3 with residual connection - with spatial reduction
+        identity = self.block3_downsample(x)  # 256x8x8
+        x = F.relu(self.block3_bn1(self.block3_conv1(x)))  # 256x8x8
+        x = self.block3_bn2(self.block3_conv2(x))  # 256x8x8
+        x = F.relu(x + identity)  # 256x8x8
         
         # FC layers
+        x = self.avgpool(x)  # 256x4x4
         x = self.flatten(x)
         x = F.relu(self.bn_fc1(self.fc1(x)))
         x = self.dropout1(x)
