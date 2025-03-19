@@ -9,12 +9,13 @@ import os
 import argparse
 from models import MNISTEncoder, CIFAR10Encoder, Classifier
 from utils import plot_tsne
+import math
 
 def train_classifier(args):
     # Set device
     device = args.device
     
-    # Set up transforms
+    # Set up transforms with data augmentation for CIFAR10
     if args.mnist:
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -25,12 +26,21 @@ def train_classifier(args):
         encoder = MNISTEncoder(args.latent_dim).to(device)
         dataset_name = "MNIST"
     else:
-        transform = transforms.Compose([
+        # Enhanced data augmentation for CIFAR10
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
-        dataset = datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=transform)
-        test_dataset = datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=transform)
+        # No augmentation for validation/test
+        test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+        dataset = datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=train_transform)
+        test_dataset = datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=test_transform)
         encoder = CIFAR10Encoder(args.latent_dim).to(device)
         dataset_name = "CIFAR10"
     
@@ -54,13 +64,25 @@ def train_classifier(args):
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(classifier.parameters(), lr=1e-3)
+    optimizer = optim.AdamW(classifier.parameters(), lr=5e-4, weight_decay=5e-4)
+    
+    # Learning rate scheduler - cosine annealing with warmup
+    total_steps = len(train_loader) * args.epochs
+    warmup_steps = len(train_loader) * 2  # 2 epochs of warmup
+    
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     # Training loop
     os.makedirs('results', exist_ok=True)
@@ -73,6 +95,7 @@ def train_classifier(args):
     print(f"[CLASSIFIER] Starting training classifier for {dataset_name} with latent dim={args.latent_dim}")
     print(f"[CLASSIFIER] Training on {device} with batch size {args.batch_size} for {args.epochs} epochs")
     print(f"[CLASSIFIER] Using pre-trained encoder from checkpoint: {model_name}")
+    print(f"[CLASSIFIER] Using data augmentation: {not args.mnist}")
     
     for epoch in range(args.epochs):
         # Training
@@ -96,6 +119,7 @@ def train_classifier(args):
             # Backward pass
             loss.backward()
             optimizer.step()
+            scheduler.step()
             
             train_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -105,7 +129,8 @@ def train_classifier(args):
             if batch_idx % 100 == 0:
                 current_acc = 100. * correct / total if total > 0 else 0
                 print(f"[CLASSIFIER] {dataset_name} - Epoch: {epoch+1}/{args.epochs}, Batch: {batch_idx}/{len(train_loader)}, "
-                      f"Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%")
+                      f"Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%, "
+                      f"LR: {scheduler.get_last_lr()[0]:.6f}")
         
         train_loss /= len(train_loader)
         train_acc = 100. * correct / total

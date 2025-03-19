@@ -50,19 +50,32 @@ class CIFAR10Encoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(CIFAR10Encoder, self).__init__()
         # CIFAR10: 3x32x32
-        self.conv1 = nn.Conv2d(3, 32, 3, stride=2, padding=1)  # 32x16x16
-        self.conv2 = nn.Conv2d(32, 64, 3, stride=2, padding=1)  # 64x8x8
-        self.conv3 = nn.Conv2d(64, 128, 3, stride=2, padding=1)  # 128x4x4
-        self.conv4 = nn.Conv2d(128, 256, 3, stride=1, padding=1)  # 256x4x4
+        # Deeper architecture with more filters and batch normalization
+        self.conv1 = nn.Conv2d(3, 64, 3, stride=1, padding=1)  # 64x32x32
+        self.bn1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 64, 3, stride=2, padding=1)  # 64x16x16
+        self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, 3, stride=1, padding=1)  # 128x16x16
+        self.bn3 = nn.BatchNorm2d(128)
+        self.conv4 = nn.Conv2d(128, 128, 3, stride=2, padding=1)  # 128x8x8
+        self.bn4 = nn.BatchNorm2d(128)
+        self.conv5 = nn.Conv2d(128, 256, 3, stride=1, padding=1)  # 256x8x8
+        self.bn5 = nn.BatchNorm2d(256)
+        self.conv6 = nn.Conv2d(256, 256, 3, stride=2, padding=1)  # 256x4x4
+        self.bn6 = nn.BatchNorm2d(256)
         self.flatten = nn.Flatten()
         self.fc = nn.Linear(256 * 4 * 4, latent_dim)
+        self.dropout = nn.Dropout(0.25)
         
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn4(self.conv4(x)))
+        x = F.relu(self.bn5(self.conv5(x)))
+        x = F.relu(self.bn6(self.conv6(x)))
         x = self.flatten(x)
+        x = self.dropout(x)
         x = self.fc(x)
         return x
 
@@ -70,30 +83,47 @@ class CIFAR10Decoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(CIFAR10Decoder, self).__init__()
         self.fc = nn.Linear(latent_dim, 256 * 4 * 4)
-        self.deconv1 = nn.ConvTranspose2d(256, 128, 3, stride=1, padding=1)  # 128x4x4
-        self.deconv2 = nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1)  # 64x8x8
-        self.deconv3 = nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1)  # 32x16x16
-        self.deconv4 = nn.ConvTranspose2d(32, 3, 3, stride=2, padding=1, output_padding=1)  # 3x32x32
+        self.bn1 = nn.BatchNorm2d(256)
+        self.deconv1 = nn.ConvTranspose2d(256, 256, 3, stride=1, padding=1)  # 256x4x4
+        self.bn2 = nn.BatchNorm2d(256)
+        self.deconv2 = nn.ConvTranspose2d(256, 128, 3, stride=2, padding=1, output_padding=1)  # 128x8x8
+        self.bn3 = nn.BatchNorm2d(128)
+        self.deconv3 = nn.ConvTranspose2d(128, 128, 3, stride=1, padding=1)  # 128x8x8
+        self.bn4 = nn.BatchNorm2d(128)
+        self.deconv4 = nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1)  # 64x16x16
+        self.bn5 = nn.BatchNorm2d(64)
+        self.deconv5 = nn.ConvTranspose2d(64, 64, 3, stride=1, padding=1)  # 64x16x16
+        self.bn6 = nn.BatchNorm2d(64)
+        self.deconv6 = nn.ConvTranspose2d(64, 3, 3, stride=2, padding=1, output_padding=1)  # 3x32x32
         
     def forward(self, x):
         x = self.fc(x)
         x = x.view(-1, 256, 4, 4)
-        x = F.relu(self.deconv1(x))
-        x = F.relu(self.deconv2(x))
-        x = F.relu(self.deconv3(x))
-        x = torch.tanh(self.deconv4(x))  # Output in range [-1, 1] to match normalization
+        x = F.relu(self.bn1(x))
+        x = F.relu(self.bn2(self.deconv1(x)))
+        x = F.relu(self.bn3(self.deconv2(x)))
+        x = F.relu(self.bn4(self.deconv3(x)))
+        x = F.relu(self.bn5(self.deconv4(x)))
+        x = F.relu(self.bn6(self.deconv5(x)))
+        x = torch.tanh(self.deconv6(x))  # Output in range [-1, 1] to match normalization
         return x
 
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):
         super(Classifier, self).__init__()
-        self.fc1 = nn.Linear(latent_dim, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, num_classes)
+        self.fc1 = nn.Linear(latent_dim, 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.dropout1 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.dropout2 = nn.Dropout(0.3)
+        self.fc3 = nn.Linear(256, num_classes)
         
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = F.relu(self.bn1(self.fc1(x)))
+        x = self.dropout1(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.dropout2(x)
         x = self.fc3(x)
         return x
 
