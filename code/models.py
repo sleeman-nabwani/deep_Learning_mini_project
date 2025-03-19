@@ -49,47 +49,74 @@ class MNISTDecoder(nn.Module):
 class CIFAR10Encoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(CIFAR10Encoder, self).__init__()
-        # CIFAR10: 3x32x32
-        # Simpler architecture with good feature extraction
-        self.conv1 = nn.Conv2d(3, 64, 3, stride=1, padding=1)  # 64x32x32
+        # CIFAR10: 3x32x32 - Enhanced architecture for better accuracy
+        # Based on a VGG-style network with residual connections
+        
+        # Initial convolution
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
-        self.pool1 = nn.MaxPool2d(2, 2)  # 64x16x16
         
-        self.conv2 = nn.Conv2d(64, 128, 3, stride=1, padding=1)  # 128x16x16
-        self.bn2 = nn.BatchNorm2d(128)
-        self.pool2 = nn.MaxPool2d(2, 2)  # 128x8x8
+        # Block 1
+        self.block1_conv1 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.block1_bn1 = nn.BatchNorm2d(64)
+        self.block1_conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.block1_bn2 = nn.BatchNorm2d(64)
         
-        self.conv3 = nn.Conv2d(128, 256, 3, stride=1, padding=1)  # 256x8x8
-        self.bn3 = nn.BatchNorm2d(256)
-        self.pool3 = nn.MaxPool2d(2, 2)  # 256x4x4
+        # Block 2
+        self.block2_conv1 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.block2_bn1 = nn.BatchNorm2d(128)
+        self.block2_conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.block2_bn2 = nn.BatchNorm2d(128)
+        self.block2_downsample = nn.Conv2d(64, 128, kernel_size=1, stride=2)
         
+        # Block 3
+        self.block3_conv1 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.block3_bn1 = nn.BatchNorm2d(256)
+        self.block3_conv2 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.block3_bn2 = nn.BatchNorm2d(256)
+        self.block3_downsample = nn.Conv2d(128, 256, kernel_size=1, stride=2)
+        
+        # Pooling
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((4, 4))
+        
+        # FC layers
         self.flatten = nn.Flatten()
-        self.dropout = nn.Dropout(0.2)  # Reduced dropout
-        self.fc = nn.Linear(256 * 4 * 4, latent_dim)
+        self.fc1 = nn.Linear(256 * 4 * 4, 512)
+        self.bn_fc1 = nn.BatchNorm1d(512)
+        self.dropout1 = nn.Dropout(0.4)
+        self.fc2 = nn.Linear(512, latent_dim)
         
     def forward(self, x):
-        # Layer 1
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = self.pool1(x)
+        # Initial convolution
+        x = F.relu(self.bn1(self.conv1(x)))
         
-        # Layer 2
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.pool2(x)
+        # Block 1 with residual connection
+        identity = x
+        x = F.relu(self.block1_bn1(self.block1_conv1(x)))
+        x = self.block1_bn2(self.block1_conv2(x))
+        x = F.relu(x + identity)
+        x = self.maxpool(x)  # 64x16x16
         
-        # Layer 3
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
-        x = self.pool3(x)
+        # Block 2 with residual connection
+        identity = self.block2_downsample(x)
+        x = F.relu(self.block2_bn1(self.block2_conv1(x)))
+        x = self.block2_bn2(self.block2_conv2(x))
+        x = F.relu(x + identity)
+        x = self.maxpool(x)  # 128x8x8
         
-        # Final layers
+        # Block 3 with residual connection
+        identity = self.block3_downsample(x)
+        x = F.relu(self.block3_bn1(self.block3_conv1(x)))
+        x = self.block3_bn2(self.block3_conv2(x))
+        x = F.relu(x + identity)
+        x = self.maxpool(x)  # 256x4x4
+        
+        # FC layers
         x = self.flatten(x)
-        x = self.dropout(x)
-        x = self.fc(x)
+        x = F.relu(self.bn_fc1(self.fc1(x)))
+        x = self.dropout1(x)
+        x = self.fc2(x)
         return x
 
 class CIFAR10Decoder(nn.Module):
@@ -124,15 +151,23 @@ class CIFAR10Decoder(nn.Module):
 class Classifier(nn.Module):
     def __init__(self, latent_dim=128, num_classes=10):
         super(Classifier, self).__init__()
-        self.fc1 = nn.Linear(latent_dim, 256)
-        self.bn1 = nn.BatchNorm1d(256)
-        self.dropout1 = nn.Dropout(0.2)  # Reduced dropout
-        self.fc2 = nn.Linear(256, num_classes)
+        # Enhanced classifier with more capacity and regularization
+        self.fc1 = nn.Linear(latent_dim, 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.dropout1 = nn.Dropout(0.3)
+        
+        self.fc2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.dropout2 = nn.Dropout(0.2)
+        
+        self.fc3 = nn.Linear(256, num_classes)
         
     def forward(self, x):
         x = F.relu(self.bn1(self.fc1(x)))
         x = self.dropout1(x)
-        x = self.fc2(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.dropout2(x)
+        x = self.fc3(x)
         return x
 
 # Full autoencoder models

@@ -27,10 +27,10 @@ def train_autoencoder(args):
         dataset_name = "MNIST"
         img_size = 28
     else:
-        # Enhanced data augmentation for CIFAR10, but more conservative for autoencoder
+        # Enhanced data augmentation for CIFAR10, matching reference image
         train_transform = transforms.Compose([
-            # Only horizontal flip for autoencoder to avoid extreme transformations
             transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])

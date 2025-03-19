@@ -26,10 +26,10 @@ def train_classifier(args):
         encoder = MNISTEncoder(args.latent_dim).to(device)
         dataset_name = "MNIST"
     else:
-        # Enhanced data augmentation for CIFAR10
+        # Enhanced data augmentation for CIFAR10 matching reference image
         train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
@@ -67,12 +67,15 @@ def train_classifier(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(classifier.parameters(), lr=3e-4, weight_decay=1e-4)
+    # Loss and optimizer with label smoothing for better generalization
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     
-    # Simpler learning rate scheduler - step decay
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    # Higher initial learning rate with Nesterov momentum
+    optimizer = optim.SGD(classifier.parameters(), lr=0.05, momentum=0.9, weight_decay=5e-4, nesterov=True)
+    
+    # Multi-step learning rate scheduler with warmup
+    milestones = [int(args.epochs * 0.3), int(args.epochs * 0.6), int(args.epochs * 0.8)]
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.2)
     
     # Training loop
     os.makedirs('results', exist_ok=True)
