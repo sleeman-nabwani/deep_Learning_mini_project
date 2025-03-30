@@ -1,0 +1,11 @@
+datasets/
+results/
+code/__pycache__/
+*.pdf
+
+# Ignore large dataset files
+datasets/cifar-10-python.tar.gz
+datasets/cifar-10-batches-py/*
+
+# Ignore large model files
+results/*/*.pth
