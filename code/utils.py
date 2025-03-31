@@ -73,9 +73,7 @@ def setup_datasets(args, model_type='encoder'):
     """
     Create and return datasets and dataloaders based on arguments.
     """
-    # Initialize augmentations as an empty list by default
-    augmentations = []
-    
+    # Determine dataset configuration based on dataset type
     if args.mnist:
         dataset_config = {
             'name': "MNIST",
@@ -87,11 +85,9 @@ def setup_datasets(args, model_type='encoder'):
             'std': [0.5],
             'model_class': MNISTAutoencoder if model_type == 'autoencoder' else MNISTEncoder
         }
-        # MNIST augmentations
+        # MNIST-specific augmentations
         augmentations = [
-            transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-            transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
-            transforms.RandomErasing(p=0.2, scale=(0.02, 0.1))
+            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.9, 1.1))
         ]
     else:
         dataset_config = {
@@ -105,12 +101,14 @@ def setup_datasets(args, model_type='encoder'):
             'model_class': CIFAR10Autoencoder if model_type == 'autoencoder' else CIFAR10Encoder
         }
         
-        # CIFAR10 augmentations
+        # Enhanced CIFAR10 augmentations for better self-supervised learning
         if model_type == 'autoencoder':
             augmentations = [
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomAffine(degrees=5, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomApply([
+                    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
+                ], p=0.8),
+                transforms.RandomGrayscale(p=0.2)
             ]
         else:
             augmentations = [
@@ -131,7 +129,7 @@ def setup_datasets(args, model_type='encoder'):
         ]
     )
     
-    # Create datasets and loaders
+    # Create datasets
     train_dataset = dataset_config['dataset_class'](
         root=args.data_path, train=True, download=True, transform=train_transform
     )
