@@ -22,28 +22,28 @@ class ClassifierTrainer(BaseTrainer):
         from models import Classifier
         self.classifier = Classifier(args.latent_dim, self.num_classes).to(args.device)
         
-        # Load pre-trained encoder if available
+        # Load pre-trained encoder
         self.load_pretrained_encoder(args)
         
         # Freeze encoder parameters
         for param in self.encoder.parameters():
             param.requires_grad = False
-        self.encoder.eval()
+        self.encoder.eval() 
+        
+        # Standard classifier loss with label smoothing
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         
         self.optimizer = optim.AdamW(
             self.classifier.parameters(), 
-            lr=3e-3,  
-            weight_decay=5e-4  
+            lr=3e-4,
+            weight_decay=1e-4
         )
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        
+
+        self.scheduler = optim.lr_scheduler.MultiStepLR(
             self.optimizer,
-            max_lr=5e-3,  
-            steps_per_epoch=len(self.train_loader),
-            epochs=self.epochs,
-            pct_start=0.1,  
-            div_factor=10,  
-            final_div_factor=100  
+            milestones=[int(self.epochs*0.5), int(self.epochs*0.75)],
+            gamma=0.1
         )
         
         # File naming
@@ -87,10 +87,8 @@ class ClassifierTrainer(BaseTrainer):
         """Train for one epoch"""
         self.classifier.train()
         total_loss = 0
-        correct = 0
-        total = 0
-        
-        # Get total number of batches for percentage calculation
+        num_batches = 0
+
         total_batches = len(self.train_loader)
         
         for batch_idx, (data, targets) in enumerate(self.train_loader):
@@ -137,17 +135,16 @@ class ClassifierTrainer(BaseTrainer):
         correct = 0
         total = 0
         
-        # Reset per-class accuracy stats
-        self.class_correct = [0] * self.num_classes
-        self.class_total = [0] * self.num_classes
+        # Track per-class accuracy
+        class_correct = [0] * self.num_classes
+        class_total = [0] * self.num_classes
         
         with torch.no_grad():
-            for batch_idx, (data, targets) in enumerate(self.val_loader):
+            for data, targets in self.val_loader:
                 data, targets = data.to(self.device), targets.to(self.device)
                 
                 # Get features from encoder
                 features = self.encoder(data)
-                features = F.normalize(features, p=2, dim=1)
                 
                 # Forward pass
                 outputs = self.classifier(features)
@@ -160,17 +157,18 @@ class ClassifierTrainer(BaseTrainer):
                 correct += batch_correct
                 total += targets.size(0)
                 
-                # Update per-class accuracy stats
-                for c in range(self.num_classes):
-                    class_mask = (targets == c)
-                    self.class_correct[c] += predicted[class_mask].eq(targets[class_mask]).sum().item()
-                    self.class_total[c] += class_mask.sum().item()
-                
+                # Track per-class accuracy
+                for i in range(targets.size(0)):
+                    label = targets[i].item()
+                    class_correct[label] += (predicted[i] == targets[i]).item()
+                    class_total[label] += 1
+        
         # Calculate metrics
         avg_loss = total_loss / len(self.val_loader)
         accuracy = 100. * correct / total
         
-        return avg_loss, accuracy
+        # Return per-class statistics along with overall metrics
+        return avg_loss, accuracy, class_correct, class_total
     
     def train(self):
         """Main training loop"""
@@ -178,52 +176,55 @@ class ClassifierTrainer(BaseTrainer):
         print(f"[CLASSIFIER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
         print(f"[CLASSIFIER] Saving results to: {self.result_dir}")
         
-        # Clear previous metrics
+        # Training metrics
         self.train_losses = []
         self.val_losses = []
         self.train_accuracies = []
         self.val_accuracies = []
         
-        # Set up best model tracking
+        # Best model tracking
         self.best_val_acc = 0
         
         # Training loop
         for epoch in range(self.epochs):
-            # Update current epoch BEFORE training
-            self.current_epoch = epoch + 1  # Start from 1 instead of 0
+            self.current_epoch = epoch + 1
             
             # Train and validate
-            train_loss, train_acc = self.train_epoch()
-            val_loss, val_acc = self.validate()
+            train_loss = self.train_epoch()
+            val_loss, val_acc, class_correct, class_total = self.validate()
             
-            # Store metrics - CRITICAL for plotting
+            # Step the scheduler
+            self.scheduler.step()
+            
+            # Store metrics
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
-            self.train_accuracies.append(train_acc)
+            self.train_accuracies.append(val_acc)
             self.val_accuracies.append(val_acc)
             
-            # Print epoch summary
+            # Print epoch summary in a format similar to AutoencoderTrainer
             print(f"[CLASSIFIER] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, "
-                  f"Train Loss: {train_loss:.6f}, Train Acc: {train_acc:.2f}%, "
+                  f"Train Loss: {train_loss:.6f}, Train Acc: {val_acc:.2f}%, "
                   f"Val Loss: {val_loss:.6f}, Val Acc: {val_acc:.2f}%, "
-                  f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
+                  f"LR: {self.optimizer.param_groups[0]['lr']:.6f}")
             
-            # Save best model (based on validation accuracy)
+            # Save best model
             if val_acc > self.best_val_acc:
                 self.best_val_acc = val_acc
-                self.save_checkpoint(self.classifier, self.model_save_path, epoch=epoch, accuracy=val_acc, loss=val_loss)
-                print(f"[CLASSIFIER] {self.dataset_name} - Saved model checkpoint with validation accuracy: {val_acc:.2f}%")
+                self.best_class_correct = class_correct.copy()
+                self.best_class_total = class_total.copy()
+                self.save_checkpoint(self.classifier, self.model_save_path, epoch=epoch, accuracy=val_acc)
+                print(f"[CLASSIFIER] Best model saved with validation accuracy: {val_acc:.2f}%")
         
-        # Evaluate on test set
-        self.evaluate_test()
+        # Print per-class accuracy summary at the end of training
+        print("\n[CLASSIFIER] Per-class accuracy summary for best model:")
+        for i in range(self.num_classes):
+            if self.best_class_total[i] > 0:
+                class_acc = 100. * self.best_class_correct[i] / self.best_class_total[i]
+                print(f"[CLASSIFIER] Accuracy of Class {i}: {class_acc:.2f}%")
         
-        # Plot training curves with enhanced visualization
-        self.plot_metrics(f'{self.dataset_name.lower()}_classifier_curves.png')
-        
-        # Generate t-SNE visualization of latent space
-        print(f"[CLASSIFIER] Generating t-SNE visualization of latent space...")
-        plot_tsne(self.encoder, self.test_loader, self.device, 
-                 dataset_name=f"{self.dataset_name.lower()}_classifier")
+        # Plot loss and accuracy curves
+        self.plot_curves()
         
         return self.classifier
     
