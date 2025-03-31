@@ -20,23 +20,31 @@ class AutoencoderTrainer(BaseTrainer):
         self.val_loader = setup['val_loader'] 
         self.test_loader = setup['test_loader']
         self.is_mnist = setup['is_mnist']
+    
+        #loss function
+        self.criterion = nn.L1Loss()
         
-        # Basic training components
-        self.criterion = nn.MSELoss()
+        # Optimizer with established weight decay for feature learning
         self.optimizer = optim.AdamW(
             self.model.parameters(), 
-            lr=1e-3,  
-            weight_decay=1e-4,  
-            betas=(0.9, 0.95)  
+            lr=3e-4, 
+            weight_decay=5e-4,  
+            betas=(0.9, 0.999)  
         )
         
-        # For advanced reconstruction quality, a different scheduler can help:
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        # Simpler LR scheduling
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
-            T_0=5,  
-            T_mult=2,  
-            eta_min=1e-6  
+            mode='min',
+            factor=0.3,
+            patience=3,
+            verbose=True
         )
+        
+        # Early stopping setup with research-based patience
+        self.patience = 3
+        self.best_val_loss = float('inf')
+        self.epochs_without_improvement = 0
         
         # File naming
         self.model_save_path = f'{self.dataset_name.lower()}_autoencoder.pth'
@@ -76,17 +84,18 @@ class AutoencoderTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             outputs = self.model(data)
             
-            # Ensure correct output dimensions
-            if outputs.shape != data.shape:
-                outputs = F.interpolate(outputs, size=data.shape[2:], mode='bilinear', align_corners=False)
-                
+            #loss calculation
             loss = self.criterion(outputs, data)
+            
+            latent = self.model.encoder(data)
+            loss = loss
             
             # Backward pass
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
-            # Simple stats tracking
+            # Stats tracking
             loss_val = loss.item()
             total_loss += loss_val
             num_batches += 1
@@ -106,31 +115,24 @@ class AutoencoderTrainer(BaseTrainer):
     
     def validate(self):
         """Validate the model"""
-        model, device = self.model, self.device
-        model.eval()
+        self.model.eval()
         total_loss = 0
-        num_batches = 0
         
         with torch.no_grad():
             for data, _ in self.val_loader:
-                data = data.to(device)
+                data = data.to(self.device)
                 
-                # Forward pass
-                outputs = model(data)
+                # Simple forward pass
+                outputs = self.model(data)
                 
-                # Ensure correct output dimensions
-                if outputs.shape != data.shape:
-                    outputs = F.interpolate(outputs, size=data.shape[2:], mode='bilinear', align_corners=False)
-                
+                # Same loss calculation as training
                 loss = self.criterion(outputs, data)
                 
-                # Track metrics
+                # Track loss
                 total_loss += loss.item()
-                num_batches += 1
         
-        # Calculate validation metrics
-        val_loss = total_loss / num_batches
-        
+        # Calculate validation loss
+        val_loss = total_loss / len(self.val_loader)
         return val_loss
     
     def plot_reconstructions(self, num_images=10):
@@ -203,17 +205,10 @@ class AutoencoderTrainer(BaseTrainer):
         """Main training loop"""
         print(f"[AUTOENCODER] Starting training for {self.dataset_name} dataset with latent dim={self.args.latent_dim}")
         print(f"[AUTOENCODER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
-        print(f"[AUTOENCODER] Saving results to: {self.result_dir}")
-        
-        # Validate that the model produces correct output shapes
-        self.validate_model()
         
         # Store metrics for plotting
         self.train_losses = []
         self.val_losses = []
-        
-        # Set up best model tracking
-        best_val_loss = float('inf')
         
         # Initialize current_epoch counter
         self.current_epoch = 0
@@ -227,51 +222,60 @@ class AutoencoderTrainer(BaseTrainer):
             train_loss = self.train_epoch()
             val_loss = self.validate()
             
-            # Step the scheduler once per epoch
-            self.scheduler.step()
-            
             # Store metrics
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
             
+            # Update learning rate based on validation loss
+            self.scheduler.step(val_loss)
+            
             # Print epoch summary
-            print(f"[AUTOENCODER] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, "
+            print(f"[AUTOENCODER] Epoch {self.current_epoch}/{self.epochs}, "
                   f"Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}, "
                   f"LR: {self.optimizer.param_groups[0]['lr']:.6f}")
             
-            # Save best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                # Save more comprehensive checkpoint
+            # Save best model and check for early stopping
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                self.epochs_without_improvement = 0
+                
+                # Save checkpoint
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'encoder_state_dict': self.model.encoder.state_dict(),
-                    'decoder_state_dict': self.model.decoder.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'loss': val_loss,
-
                 }, os.path.join(self.result_dir, self.model_save_path))
-                print(f"[AUTOENCODER] Best model saved with validation loss: {best_val_loss:.6f}")
-            
-            # Plot reconstructions at the end of training
-            if self.current_epoch == self.epochs:
-                self.plot_reconstructions()
                 
-                # Plot loss curves
-                plt.figure(figsize=(10, 5))
-                plt.plot(range(1, self.epochs + 1), self.train_losses, label='Train Loss')
-                plt.plot(range(1, self.epochs + 1), self.val_losses, label='Validation Loss')
-                plt.xlabel('Epoch')
-                plt.ylabel('Loss')
-                plt.title(f'{self.dataset_name} Autoencoder Training')
-                plt.legend()
-                plt.grid(True)
-                plt.savefig(os.path.join(self.result_dir, f'{self.dataset_name.lower()}_loss.png'))
-                plt.close()
+                print(f"[AUTOENCODER] Best model saved with validation loss: {val_loss:.6f}")
+            else:
+                self.epochs_without_improvement += 1
+                print(f"[AUTOENCODER] No improvement for {self.epochs_without_improvement} epochs")
+                
+                # Early stopping check
+                if self.epochs_without_improvement >= self.patience:
+                    print(f"[AUTOENCODER] Early stopping after {self.current_epoch} epochs")
+                    break
+            
+            # Plot reconstructions at the end
+            if self.current_epoch == self.epochs or self.epochs_without_improvement >= self.patience:
+                self.plot_reconstructions()
         
         # Load best model for return
         best_checkpoint = torch.load(os.path.join(self.result_dir, self.model_save_path))
         self.model.load_state_dict(best_checkpoint['model_state_dict'])
+        
+        # Plot training and validation loss
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, len(self.train_losses) + 1), self.train_losses, label='Train Loss')
+        plt.plot(range(1, len(self.val_losses) + 1), self.val_losses, label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title(f'{self.dataset_name} Autoencoder Training')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(self.result_dir, f'{self.dataset_name.lower()}_loss.png'))
+        plt.close()
         
         return self.model

@@ -84,11 +84,18 @@ if __name__ == "__main__":
         trainer = ClassifierTrainer(args, setup)
         classifier = trainer.train()
         print("=== CLASSIFIER TRAINING COMPLETE ===\n")
-        #training the classifier on top of the pretrained encoder
+    #training the classifier on top of the pretrained encoder
+    if args.train_classifier:
+        print("\n=== STARTING CLASSIFIER TRAINING ===")
+        setup = setup_datasets(args, model_type='encoder')
+        trainer = ClassifierTrainer(args, setup)
+        classifier = trainer.train()
+        print("=== CLASSIFIER TRAINING COMPLETE ===\n")
     # Classification-guided training (section 1.2.2)
     if args.classification_guided:
         print("\n=== STARTING CLASSIFICATION-GUIDED TRAINING ===")
         print("Training encoder jointly with classifier (no reconstruction objective)")
+        setup = setup_datasets(args, model_type='encoder')
         trainer = ClassificationGuidedTrainer(args, setup)
         encoder, classifier = trainer.train()
         print("=== CLASSIFICATION-GUIDED TRAINING COMPLETE ===\n")

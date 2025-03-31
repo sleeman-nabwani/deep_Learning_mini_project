@@ -1,3 +1,7 @@
+# Force non-interactive Agg backend - add this at the very top
+import matplotlib
+matplotlib.use('Agg')
+
 import torch
 import numpy as np
 from sklearn.manifold import TSNE
@@ -69,7 +73,9 @@ def setup_datasets(args, model_type='encoder'):
     """
     Create and return datasets and dataloaders based on arguments.
     """
-    # Determine dataset configuration based on dataset type
+    # Initialize augmentations as an empty list by default
+    augmentations = []
+    
     if args.mnist:
         dataset_config = {
             'name': "MNIST",
@@ -81,9 +87,11 @@ def setup_datasets(args, model_type='encoder'):
             'std': [0.5],
             'model_class': MNISTAutoencoder if model_type == 'autoencoder' else MNISTEncoder
         }
-        # MNIST-specific augmentations
+        # MNIST augmentations
         augmentations = [
-            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.9, 1.1))
+            transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+            transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+            transforms.RandomErasing(p=0.2, scale=(0.02, 0.1))
         ]
     else:
         dataset_config = {
@@ -97,14 +105,12 @@ def setup_datasets(args, model_type='encoder'):
             'model_class': CIFAR10Autoencoder if model_type == 'autoencoder' else CIFAR10Encoder
         }
         
-        # Enhanced CIFAR10 augmentations for better self-supervised learning
+        # CIFAR10 augmentations
         if model_type == 'autoencoder':
             augmentations = [
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomApply([
-                    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
-                ], p=0.8),
-                transforms.RandomGrayscale(p=0.2)
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomAffine(degrees=5, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),
             ]
         else:
             augmentations = [
@@ -125,7 +131,7 @@ def setup_datasets(args, model_type='encoder'):
         ]
     )
     
-    # Create datasets
+    # Create datasets and loaders
     train_dataset = dataset_config['dataset_class'](
         root=args.data_path, train=True, download=True, transform=train_transform
     )
@@ -133,7 +139,6 @@ def setup_datasets(args, model_type='encoder'):
     val_size = 5000
     train_size = len(train_dataset) - val_size
     train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
-    
     test_dataset = dataset_config['dataset_class'](
         root=args.data_path, train=False, download=True, transform=base_transform
     )
