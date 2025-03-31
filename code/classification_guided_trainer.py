@@ -4,28 +4,28 @@ import torch.optim as optim
 import torch.nn.functional as F
 import os
 from base_trainer import BaseTrainer
+from models import Classifier, MNISTEncoder, CIFAR10Encoder
 from utils import plot_tsne
 
 class ClassificationGuidedTrainer(BaseTrainer):
     """Trainer for joint encoder and classifier (classification-guided training)"""
     
     def __init__(self, args, setup):
-        super().__init__(args, 'classification_guided')
-        self.encoder = setup['model']  # This is the encoder
-        self.dataset_name = setup['dataset_name']
-        self.train_loader = setup['train_loader']
-        self.val_loader = setup['val_loader']
-        self.test_loader = setup['test_loader']
-        self.num_classes = setup.get('num_classes', 10)
+        super().__init__(args, 'guided')
+        self.setup_dataloaders(setup)
+        self._setup_models_optimizers(setup)
+        self.load_checkpoint() # Load checkpoint if exists
+    
+    def _setup_models_optimizers(self, setup):
+        """Initializes Encoder, Classifier, optimizer, scheduler, criterion."""
+        encoder_class = MNISTEncoder if setup['is_mnist'] else CIFAR10Encoder
+        # The 'model' passed from setup_datasets is the encoder here
+        self.encoder = setup['model'].to(self.device)
+        self.classifier = Classifier(self.args.latent_dim, self.num_classes).to(self.device)
         
-        # Create classifier
-        from models import Classifier
-        self.classifier = Classifier(args.latent_dim, self.num_classes).to(self.device)
-        
-        # Initialize training components
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
         
-        # Unlike classifier training, we train both encoder and classifier
+        # Optimizer trains both encoder and classifier
         self.optimizer = optim.AdamW([
             {'params': self.encoder.parameters()},
             {'params': self.classifier.parameters()}
@@ -34,8 +34,43 @@ class ClassificationGuidedTrainer(BaseTrainer):
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=self.epochs, eta_min=1e-6)
         
-        # File naming
-        self.model_save_path = f'{self.dataset_name.lower()}_guided.pth'
+        self.model_save_path = f"{self.dataset_name.lower()}_guided"
+        print(f"[{self.trainer_type}] Encoder: {encoder_class.__name__}, Classifier: Classifier (Both Trainable)")
+    
+    def _train_batch(self, batch):
+        """Processes a single training batch (encoder + classifier)."""
+        data, targets = self._unpack_batch(batch)
+        data, targets = data.to(self.device), targets.to(self.device)
+        
+        # Forward pass through encoder and classifier
+        self.optimizer.zero_grad()
+        features = self.encoder(data)
+        features_normalized = F.normalize(features, p=2, dim=1) # Normalize for classifier
+        outputs = self.classifier(features_normalized)
+        loss = self.criterion(outputs, targets)
+        
+        # Backward pass (updates both models)
+        loss.backward()
+        self.optimizer.step()
+        
+        # Metrics
+        _, predicted = outputs.max(1)
+        correct = predicted.eq(targets).sum().item()
+        total = targets.size(0)
+        accuracy = 100. * correct / total
+        
+        # Return metrics needed by BaseTrainer's epoch loop
+        return {'loss': loss.item(), 'correct': correct, 'total': total, 'accuracy': accuracy}
+    
+    def _validate_epoch(self):
+        """Performs a validation epoch using the generic evaluate method."""
+        # BaseTrainer's evaluate method handles GUIDED type correctly
+        val_metrics = self.evaluate(self.val_loader)
+        return val_metrics
+    
+    # Override _get_trained_model to return both components
+    def _get_trained_model(self):
+        return self.encoder, self.classifier
     
     def train_epoch(self):
         """Train for one epoch"""

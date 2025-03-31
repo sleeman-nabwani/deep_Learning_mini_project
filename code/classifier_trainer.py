@@ -6,283 +6,107 @@ import os
 import numpy as np
 from base_trainer import BaseTrainer
 from utils import plot_tsne
+from models import Classifier, MNISTEncoder, CIFAR10Encoder
 
 class ClassifierTrainer(BaseTrainer):
-    """Trainer for classifier on top of frozen encoder"""
+    """Trainer for classifier on top of frozen encoder using refactored BaseTrainer"""
     
     def __init__(self, args, setup):
         super().__init__(args, 'classifier')
-        self.encoder = setup['encoder'].to(args.device)
-        self.dataset_name = setup['dataset_name']
-        self.train_loader = setup['train_loader']
-        self.val_loader = setup['val_loader']
-        self.test_loader = setup['test_loader']
-        self.num_classes = 10  
-        
-        from models import Classifier
-        self.classifier = Classifier(args.latent_dim, self.num_classes).to(args.device)
-        
-        # Load pre-trained encoder if available
-        self.load_pretrained_encoder(args)
-        
-        # Freeze encoder parameters
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-        self.encoder.eval()
+        self.setup_dataloaders(setup)
+        self._setup_models_optimizers(setup)
+
+        # Load pretrained encoder *before* potentially loading classifier checkpoint
+        self._load_pretrained_encoder_from_args()
+
+        # Freeze encoder (BaseTrainer's set_train_mode handles this based on type)
+        self.set_train_mode(False) # Initial mode setup
+
+        # Load classifier checkpoint if exists (will load optimizer/scheduler too)
+        self.load_checkpoint()
+
+    def _setup_models_optimizers(self, setup):
+        """Initializes Encoder, Classifier, optimizer, scheduler, criterion."""
+        # Setup Encoder (will be frozen)
+        encoder_class = MNISTEncoder if setup['is_mnist'] else CIFAR10Encoder
+        # We need the encoder instance, but BaseTrainer expects self.model or self.encoder/self.classifier
+        # Let's store it in self.encoder directly. BaseTrainer's evaluate uses it.
+        self.encoder = encoder_class(self.args.latent_dim).to(self.device)
+
+        # Setup Classifier (trainable)
+        self.classifier = Classifier(self.args.latent_dim, self.num_classes).to(self.device)
+
+        # Define criterion, optimizer, scheduler (only for classifier parameters)
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-        
         self.optimizer = optim.AdamW(
-            self.classifier.parameters(), 
-            lr=3e-3,  
-            weight_decay=5e-4  
+            self.classifier.parameters(),
+            lr=3e-3,
+            weight_decay=5e-4
         )
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
-            max_lr=5e-3,  
+            max_lr=5e-3,
             steps_per_epoch=len(self.train_loader),
             epochs=self.epochs,
-            pct_start=0.1,  
-            div_factor=10,  
-            final_div_factor=100  
+            pct_start=0.1,
+            div_factor=10,
+            final_div_factor=100
         )
-        
-        # File naming
-        self.model_save_path = f'{self.dataset_name.lower()}_classifier.pth'
-        
-        # Track per-class accuracies
-        self.class_correct = [0] * self.num_classes
-        self.class_total = [0] * self.num_classes
-    
-    def load_pretrained_encoder(self, args):
-        """Load pretrained encoder from autoencoder checkpoint"""
-        # Corrected path - don't prepend result_dir
-        autoencoder_path = os.path.join('results/self_supervised', 
-                                     f'{self.dataset_name.lower()}', f'{self.dataset_name.lower()}_autoencoder.pth')
-        
-        try:
-            # Load the checkpoint
-            checkpoint = torch.load(autoencoder_path, map_location=args.device)
-            
-            # Handle different checkpoint structures
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                # Extract just the encoder part
-                encoder_state_dict = {k.replace('encoder.', ''): v for k, v in checkpoint['model_state_dict'].items() 
-                                  if k.startswith('encoder.')}
-                self.encoder.load_state_dict(encoder_state_dict)
-            elif isinstance(checkpoint, dict) and 'encoder_state_dict' in checkpoint:
-                # Direct encoder state dict
-                self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-            else:
-                # Old format or direct model state dict
-                encoder_state_dict = {k.replace('encoder.', ''): v for k, v in checkpoint.items() 
-                                  if k.startswith('encoder.')}
-                self.encoder.load_state_dict(encoder_state_dict)
-            
-            print(f"[CLASSIFIER] Successfully loaded pretrained encoder from {autoencoder_path}")
-        except Exception as e:
-            print(f"[CLASSIFIER] ERROR: Failed to load pretrained encoder: {e}")
-            print("[CLASSIFIER] Training will continue with randomly initialized encoder")
-    
-    def train_epoch(self):
-        """Train for one epoch"""
-        self.classifier.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        # Get total number of batches for percentage calculation
-        total_batches = len(self.train_loader)
-        
-        for batch_idx, (data, targets) in enumerate(self.train_loader):
-            data, targets = data.to(self.device), targets.to(self.device)
-            
-            # Forward pass through encoder (with gradient disabled since it's frozen)
-            with torch.no_grad():
-                features = self.encoder(data)
-            
-            # Forward pass through classifier
-            self.optimizer.zero_grad()
-            outputs = self.classifier(features)
-            loss = self.criterion(outputs, targets)
-            
-            # Backward pass
-            loss.backward()
-            
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(self.classifier.parameters(), max_norm=1.0)
-            
-            self.optimizer.step()
-            
-            # Update LR scheduler every batch
-            self.scheduler.step()
-            
-            # Compute metrics
-            total_loss += loss.item()
-            _, predicted = outputs.max(1)
-            batch_correct = predicted.eq(targets).sum().item()
-            correct += batch_correct
-            total += targets.size(0)
-            
-            # Print progress
-            if (batch_idx + 1) % max(1, len(self.train_loader) // 10) == 0:
-                print(f"[CLASSIFIER] {self.dataset_name} - "
-                      f"Epoch: {self.current_epoch}, "
-                      f"Batch: {batch_idx+1}/{len(self.train_loader)} "
-                      f"({100. * (batch_idx+1) / len(self.train_loader):.0f}%), "
-                      f"Loss: {loss.item():.6f}, "
-                      f"Batch Accuracy: {100. * batch_correct / targets.size(0):.2f}%")
-        
-        # Calculate metrics
-        avg_loss = total_loss / len(self.train_loader)
+
+        self.model_save_path = f"{self.dataset_name.lower()}_classifier"
+        print(f"[{self.trainer_type}] Encoder: {encoder_class.__name__} (Frozen), Classifier: Classifier, Criterion: CrossEntropyLoss, Optimizer: AdamW, Scheduler: OneCycleLR")
+
+    def _load_pretrained_encoder_from_args(self):
+        """Loads the pretrained encoder specified by convention or args."""
+        # Determine expected pretrained encoder path (e.g., from autoencoder)
+        # Convention: Use the best autoencoder checkpoint
+        encoder_model_name = f"{self.dataset_name.lower()}_autoencoder_best.pth"
+        encoder_path = os.path.join(self.result_dir, encoder_model_name)
+        print(f"[{self.trainer_type}] Attempting to load pretrained encoder from: {encoder_path}")
+        loaded = self._load_pretrained_encoder(encoder_path)
+        if not loaded:
+             print(f"[{self.trainer_type}] WARNING: Pretrained encoder not loaded. Classifier training will use randomly initialized encoder features (which is unusual).")
+             # Decide if this should be an error or just a warning
+             # raise FileNotFoundError(f"Pretrained encoder checkpoint not found at {encoder_path}")
+
+    def _train_batch(self, batch):
+        """Processes a single training batch for the Classifier (encoder frozen)."""
+        data, targets = self._unpack_batch(batch)
+        data, targets = data.to(self.device), targets.to(self.device)
+
+        # --- Forward pass ---
+        self.optimizer.zero_grad()
+
+        # Encoder features (encoder is frozen via set_train_mode)
+        with torch.no_grad(): # Explicit no_grad for encoder forward pass
+             features = self.encoder(data)
+             features = F.normalize(features, p=2, dim=1) # Normalize features
+
+        # Classifier forward pass (trainable)
+        outputs = self.classifier(features)
+        loss = self.criterion(outputs, targets)
+
+        # --- Backward pass (only affects classifier) ---
+        loss.backward()
+        self.optimizer.step()
+
+        # --- Scheduler Step (if per-batch like OneCycleLR) ---
+        if isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+             self.scheduler.step()
+
+        # --- Metrics ---
+        _, predicted = outputs.max(1)
+        correct = predicted.eq(targets).sum().item()
+        total = targets.size(0)
         accuracy = 100. * correct / total
-        
-        return epoch_loss, epoch_acc
-    
-    def validate(self):
-        """Validate the model"""
-        self.classifier.eval()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        # Reset per-class accuracy stats
-        self.class_correct = [0] * self.num_classes
-        self.class_total = [0] * self.num_classes
-        
-        with torch.no_grad():
-            for batch_idx, (data, targets) in enumerate(self.val_loader):
-                data, targets = data.to(self.device), targets.to(self.device)
-                
-                # Get features from encoder
-                features = self.encoder(data)
-                features = F.normalize(features, p=2, dim=1)
-                
-                # Forward pass
-                outputs = self.classifier(features)
-                loss = self.criterion(outputs, targets)
-                
-                # Compute metrics
-                total_loss += loss.item()
-                _, predicted = outputs.max(1)
-                batch_correct = predicted.eq(targets).sum().item()
-                correct += batch_correct
-                total += targets.size(0)
-                
-                # Update per-class accuracy stats
-                for c in range(self.num_classes):
-                    class_mask = (targets == c)
-                    self.class_correct[c] += predicted[class_mask].eq(targets[class_mask]).sum().item()
-                    self.class_total[c] += class_mask.sum().item()
-                
-        # Calculate metrics
-        avg_loss = total_loss / len(self.val_loader)
-        accuracy = 100. * correct / total
-        
-        return avg_loss, accuracy
-    
-    def train(self):
-        """Main training loop"""
-        print(f"[CLASSIFIER] Starting training for {self.dataset_name} dataset with latent dim={self.args.latent_dim}")
-        print(f"[CLASSIFIER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
-        print(f"[CLASSIFIER] Saving results to: {self.result_dir}")
-        
-        # Clear previous metrics
-        self.train_losses = []
-        self.val_losses = []
-        self.train_accuracies = []
-        self.val_accuracies = []
-        
-        # Set up best model tracking
-        self.best_val_acc = 0
-        
-        # Training loop
-        for epoch in range(self.epochs):
-            # Update current epoch BEFORE training
-            self.current_epoch = epoch + 1  # Start from 1 instead of 0
-            
-            # Train and validate
-            train_loss, train_acc = self.train_epoch()
-            val_loss, val_acc = self.validate()
-            
-            # Store metrics - CRITICAL for plotting
-            self.train_losses.append(train_loss)
-            self.val_losses.append(val_loss)
-            self.train_accuracies.append(train_acc)
-            self.val_accuracies.append(val_acc)
-            
-            # Print epoch summary
-            print(f"[CLASSIFIER] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, "
-                  f"Train Loss: {train_loss:.6f}, Train Acc: {train_acc:.2f}%, "
-                  f"Val Loss: {val_loss:.6f}, Val Acc: {val_acc:.2f}%, "
-                  f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
-            
-            # Save best model (based on validation accuracy)
-            if val_acc > self.best_val_acc:
-                self.best_val_acc = val_acc
-                self.save_checkpoint(self.classifier, self.model_save_path, epoch=epoch, accuracy=val_acc, loss=val_loss)
-                print(f"[CLASSIFIER] {self.dataset_name} - Saved model checkpoint with validation accuracy: {val_acc:.2f}%")
-        
-        # Evaluate on test set
-        self.evaluate_test()
-        
-        # Plot training curves with enhanced visualization
-        self.plot_metrics(f'{self.dataset_name.lower()}_classifier_curves.png')
-        
-        # Generate t-SNE visualization of latent space
-        print(f"[CLASSIFIER] Generating t-SNE visualization of latent space...")
-        plot_tsne(self.encoder, self.test_loader, self.device, 
-                 dataset_name=f"{self.dataset_name.lower()}_classifier")
-        
-        return self.classifier
-    
-    def evaluate_test(self):
-        """Evaluate model on test set with detailed metrics"""
-        self.encoder.eval()
-        self.classifier.eval()
-        
-        # Prepare metric tracking
-        total_loss = 0
-        correct = 0
-        total = 0
-        class_correct = [0] * self.num_classes
-        class_total = [0] * self.num_classes
-        
-        print(f"\n[CLASSIFIER] {self.dataset_name} - Evaluating on test set...")
-        
-        with torch.no_grad():
-            for batch_idx, (data, targets) in enumerate(self.test_loader):
-                data, targets = data.to(self.device), targets.to(self.device)
-                
-                # Get features from encoder and preprocess
-                features = self.encoder(data)
-                features = self.preprocess_features(features)
-                
-                # Forward pass through classifier
-                outputs = self.classifier(features)
-                loss = self.criterion(outputs, targets)
-                
-                # Compute metrics
-                total_loss += loss.item()
-                _, predicted = outputs.max(1)
-                batch_correct = predicted.eq(targets).sum().item()
-                correct += batch_correct
-                total += targets.size(0)
-                
-                # Per-class accuracy
-                for c in range(self.num_classes):
-                    class_mask = (targets == c)
-                    class_correct[c] += (predicted[class_mask] == c).sum().item()
-                    class_total[c] += class_mask.sum().item()
-                
-        # Calculate metrics
-        avg_loss = total_loss / len(self.test_loader)
-        accuracy = 100. * correct / total
-        
-        # Print per-class accuracy
-        print(f"[CLASSIFIER] {self.dataset_name} - Test per-class accuracy:")
-        for i in range(self.num_classes):
-            class_acc = 100. * class_correct[i] / class_total[i] if class_total[i] > 0 else 0
-            print(f"    Class {i}: {class_acc:.2f}%")
-        
-        print(f"[CLASSIFIER] {self.dataset_name} - Test Loss: {avg_loss:.6f}, Test Acc: {accuracy:.2f}%")
-        return accuracy
+
+        return {'loss': loss.item(), 'correct': correct, 'total': total, 'accuracy': accuracy}
+
+    def _validate_epoch(self):
+        """Performs a validation epoch using the generic evaluate method."""
+        # BaseTrainer's evaluate method handles CLASSIFIER type correctly
+        val_metrics = self.evaluate(self.val_loader)
+        return val_metrics
+
+    # evaluate_test is now handled by the base class calling evaluate(self.test_loader)
+    # plot_tsne can be called from main script or after training if needed
