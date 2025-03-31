@@ -99,7 +99,7 @@ class ClassifierTrainer(BaseTrainer):
             # Forward pass through encoder (with gradient disabled since it's frozen)
             with torch.no_grad():
                 features = self.encoder(data)
-            
+
             # Forward pass through classifier
             self.optimizer.zero_grad()
             outputs = self.classifier(features)
@@ -107,35 +107,27 @@ class ClassifierTrainer(BaseTrainer):
             
             # Backward pass
             loss.backward()
-            
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(self.classifier.parameters(), max_norm=1.0)
-            
             self.optimizer.step()
-            
-            # Update LR scheduler every batch
-            self.scheduler.step()
-            
-            # Compute metrics
+            self.scheduler.step() # Step the scheduler each batch for OneCycleLR
+
+            # Track metrics
             total_loss += loss.item()
             _, predicted = outputs.max(1)
-            batch_correct = predicted.eq(targets).sum().item()
-            correct += batch_correct
             total += targets.size(0)
-            
-            # Print progress
-            if (batch_idx + 1) % max(1, len(self.train_loader) // 10) == 0:
-                print(f"[CLASSIFIER] {self.dataset_name} - "
-                      f"Epoch: {self.current_epoch}, "
-                      f"Batch: {batch_idx+1}/{len(self.train_loader)} "
-                      f"({100. * (batch_idx+1) / len(self.train_loader):.0f}%), "
-                      f"Loss: {loss.item():.6f}, "
-                      f"Batch Accuracy: {100. * batch_correct / targets.size(0):.2f}%")
-        
-        # Calculate metrics
-        avg_loss = total_loss / len(self.train_loader)
-        accuracy = 100. * correct / total
-        
+            correct += predicted.eq(targets).sum().item()
+
+            # Print batch progress (optional)
+            if batch_idx % 100 == 0:
+                current_acc = 100. * correct / total if total > 0 else 0
+                print(f"[CLASSIFIER] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, "
+                      f"Batch: {batch_idx}/{len(self.train_loader)}, "
+                      f"Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%, "
+                      f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
+
+        # Calculate epoch metrics AFTER the loop
+        epoch_loss = total_loss / len(self.train_loader)
+        epoch_acc = 100. * correct / total
+
         return epoch_loss, epoch_acc
     
     def validate(self):
@@ -253,9 +245,8 @@ class ClassifierTrainer(BaseTrainer):
             for batch_idx, (data, targets) in enumerate(self.test_loader):
                 data, targets = data.to(self.device), targets.to(self.device)
                 
-                # Get features from encoder and preprocess
+                # Get features from encoder
                 features = self.encoder(data)
-                features = self.preprocess_features(features)
                 
                 # Forward pass through classifier
                 outputs = self.classifier(features)

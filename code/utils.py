@@ -1,3 +1,7 @@
+# Force non-interactive Agg backend - add this at the very top
+import matplotlib
+matplotlib.use('Agg')
+
 import torch
 import numpy as np
 from sklearn.manifold import TSNE
@@ -133,7 +137,6 @@ def setup_datasets(args, model_type='encoder'):
     val_size = 5000
     train_size = len(train_dataset) - val_size
     train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
-    
     test_dataset = dataset_config['dataset_class'](
         root=args.data_path, train=False, download=True, transform=base_transform
     )

@@ -6,9 +6,12 @@ class MNISTEncoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(MNISTEncoder, self).__init__()
         # MNIST: 1x28x28
-        self.conv1 = nn.Conv2d(1, 32, 3, stride=2, padding=1)  # 32x14x14
-        self.conv2 = nn.Conv2d(32, 64, 3, stride=2, padding=1)  # 64x7x7
-        self.conv3 = nn.Conv2d(64, 128, 3, stride=2, padding=1)  # 128x4x4
+        self.conv1 = nn.Conv2d(1, 32, 3, stride=2, padding=1) 
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 64, 3, stride=2, padding=1) 
+        self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, 3, stride=2, padding=1)  
+        self.bn3 = nn.BatchNorm2d(128)
         self.flatten = nn.Flatten()
         self.fc = nn.Linear(128 * 4 * 4, latent_dim)
         
@@ -21,9 +24,9 @@ class MNISTEncoder(nn.Module):
         if x.size(1) == 3:  # If RGB input
             x = x.mean(dim=1, keepdim=True)  # Convert to grayscale
             
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
         x = self.flatten(x)
         x = self.fc(x)
         return x
@@ -32,18 +35,20 @@ class MNISTDecoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(MNISTDecoder, self).__init__()
         self.fc = nn.Linear(latent_dim, 128 * 4 * 4)
-        self.deconv1 = nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1)  # 64x8x8
-        self.deconv2 = nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1)  # 32x16x16
-        self.deconv3 = nn.ConvTranspose2d(32, 1, 3, stride=2, padding=2, output_padding=1)  # 1x28x28
-        
+        # Deconv layers setup
+        self.deconv_layers = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1),  
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),   
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 1, 3, stride=2, padding=3, output_padding=1)     
+        )
+
     def forward(self, x):
         x = self.fc(x)
         x = x.view(-1, 128, 4, 4)
-        x = F.relu(self.deconv1(x))
-        x = F.relu(self.deconv2(x))
-        x = torch.tanh(self.deconv3(x))  # Output in range [-1, 1] to match normalization
-        if x.size(2) != 28 or x.size(3) != 28:
-            x = F.interpolate(x, size=(28, 28), mode='bilinear', align_corners=False)
+        x = self.deconv_layers(x)
+        x = torch.tanh(x) 
         return x
 
 class ResidualBlock(nn.Module):

@@ -22,7 +22,7 @@ class AutoencoderTrainer(BaseTrainer):
         self.is_mnist = setup['is_mnist']
         
         # Basic training components
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.L1Loss()
         self.optimizer = optim.AdamW(
             self.model.parameters(), 
             lr=1e-3,  
