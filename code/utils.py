@@ -86,23 +86,34 @@ def setup_datasets(args, model_type='encoder'):
             'model_class': MNISTAutoencoder if model_type == 'autoencoder' else MNISTEncoder
         }
         # MNIST-specific augmentations
-        augmentations = [
-            transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.9, 1.1))
-        ]
-    else:
+        if model_type == 'contrastive':
+            augmentations = []
+        elif model_type == 'autoencoder':
+            # Augmentations for autoencoder
+            augmentations = [
+                transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.9, 1.1))
+            ]
+        else: # Default/Classifier
+             augmentations = [] # Or minimal augmentations if desired for classifier training data
+
+    else: # CIFAR10
         dataset_config = {
             'name': "CIFAR10",
             'img_size': 32,
             'is_mnist': False,
             'num_classes': 10,
             'dataset_class': datasets.CIFAR10,
-            'mean': [0.4914, 0.4822, 0.4465],  
-            'std': [0.2023, 0.1994, 0.2010],  
+            'mean': [0.4914, 0.4822, 0.4465],
+            'std': [0.2023, 0.1994, 0.2010],
             'model_class': CIFAR10Autoencoder if model_type == 'autoencoder' else CIFAR10Encoder
         }
         
-        # Enhanced CIFAR10 augmentations for better self-supervised learning
-        if model_type == 'autoencoder':
+        # Enhanced CIFAR10 augmentations 
+        if model_type == 'contrastive':
+            # NO augmentations here for contrastive; trainer handles it
+            augmentations = []
+        elif model_type == 'autoencoder':
+            # Augmentations for autoencoder training
             augmentations = [
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomApply([
@@ -110,12 +121,13 @@ def setup_datasets(args, model_type='encoder'):
                 ], p=0.8),
                 transforms.RandomGrayscale(p=0.2)
             ]
-        else:
+        else: # Default/Classifier
+            # Basic augmentations for classifier training data
             augmentations = [
                 transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)
+                # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2) # Optional basic jitter
             ]
-    
+
     # Create transforms
     base_transform = transforms.Compose([
         transforms.ToTensor(),
@@ -146,8 +158,9 @@ def setup_datasets(args, model_type='encoder'):
     val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
     
-    # Create model
-    model = dataset_config['model_class'](args.latent_dim).to(args.device)
+    # Create model instance (ensure this happens correctly)
+    model_constructor = dataset_config['model_class']
+    model = model_constructor(args.latent_dim).to(args.device)
     
     # Construct the return dictionary
     setup = {
@@ -161,26 +174,31 @@ def setup_datasets(args, model_type='encoder'):
     }
     
     # Add model and encoder based on model_type
-    if model_type in ['autoencoder', 'encoder', 'classifier']:
+    if model_type in ['autoencoder', 'contrastive', 'classification_guided']:
         setup['model'] = model
-        if model_type in ['encoder', 'classifier']:
+        if model_type in ['contrastive', 'classification_guided']:
             setup['encoder'] = model
     
     return setup
 
-def get_result_dir(args, training_type):
-    """
-    Create and return an appropriate result directory based on 
-    training type and dataset.
+def get_result_dir(args, model_type):
+    """Get the appropriate results directory based on model type and dataset"""
+    # Standardize model_type naming: replace hyphen with underscore
+    if model_type == 'self-supervised':
+        model_type = 'self_supervised'  # Convert to consistent underscore format
     
-    Args:
-        args: Command line arguments
-        training_type: 'self_supervised' or 'classification_guided'
-        
-    Returns:
-        str: Path to the result directory
-    """
-    dataset_name = "mnist" if args.mnist else "cifar10"
-    result_dir = os.path.join('results', training_type, dataset_name)
-    os.makedirs(result_dir, exist_ok=True)
+    # Create the base results directory if it doesn't exist
+    if not os.path.exists('results'):
+        os.makedirs('results')
+    
+    # Determine dataset name from args.mnist flag
+    dataset_name = 'mnist' if args.mnist else 'cifar10'
+    
+    # Create the full path: results/model_type/dataset_name/
+    result_dir = os.path.join('results', model_type, dataset_name)
+    
+    # Create the directory if it doesn't exist
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
+    
     return result_dir

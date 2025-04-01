@@ -5,48 +5,71 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from base_trainer import BaseTrainer
-from utils import plot_tsne
+from utils import get_result_dir
 
 class ClassifierTrainer(BaseTrainer):
     """Trainer for classifier on top of frozen encoder"""
     
     def __init__(self, args, setup):
         super().__init__(args, 'classifier')
-        self.encoder = setup['encoder'].to(args.device)
+        
+        # Print CUDA status once during initialization
+        print(f"[CLASSIFIER] Training on: {self.device}")
+        
+        # Get dataset info from setup
         self.dataset_name = setup['dataset_name']
         self.train_loader = setup['train_loader']
         self.val_loader = setup['val_loader']
         self.test_loader = setup['test_loader']
-        self.num_classes = 10  
+        self.num_classes = 10
+        self.is_mnist = 'mnist' in self.dataset_name.lower()
         
+        # Determine encoder type from args
+        self.encoder_type = args.encoder_type
+        
+        # Create the appropriate encoder architecture based on dataset
+        from models import MNISTEncoder, CIFAR10Encoder, Classifier
+        
+        # Initialize the correct encoder architecture
+        if self.is_mnist:
+            self.encoder = MNISTEncoder(latent_dim=args.latent_dim).to(self.device)
+        else:
+            self.encoder = CIFAR10Encoder(latent_dim=args.latent_dim).to(self.device)
+        
+        # Create the classifier
         from models import Classifier
         self.classifier = Classifier(args.latent_dim, self.num_classes).to(args.device)
         
-        # Load pre-trained encoder if available
+        # Load pre-trained encoder weights
         self.load_pretrained_encoder(args)
         
         # Freeze encoder parameters
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.2)
         
         self.optimizer = optim.AdamW(
             self.classifier.parameters(), 
             lr=3e-3,  
-            weight_decay=5e-4  
+            weight_decay=2e-3
         )
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
-            max_lr=5e-3,  
+            max_lr=1e-3, 
             steps_per_epoch=len(self.train_loader),
             epochs=self.epochs,
-            pct_start=0.1,  
-            div_factor=10,  
-            final_div_factor=100  
+            pct_start=0.1,
+            div_factor=10,
+            final_div_factor=100
         )
         
-        # File naming
+        # Create result directory structure
+        self.results_subdir = f'results/classifier/{self.encoder_type}/{self.dataset_name.lower()}'
+        os.makedirs(self.results_subdir, exist_ok=True)
+        
+        self.result_dir = self.results_subdir
         self.model_save_path = f'{self.dataset_name.lower()}_classifier.pth'
         
         # Track per-class accuracies
@@ -54,37 +77,72 @@ class ClassifierTrainer(BaseTrainer):
         self.class_total = [0] * self.num_classes
     
     def load_pretrained_encoder(self, args):
-        """Load pretrained encoder from autoencoder checkpoint"""
-        # Corrected path - don't prepend result_dir
-        autoencoder_path = os.path.join('results/self_supervised', 
-                                     f'{self.dataset_name.lower()}', f'{self.dataset_name.lower()}_autoencoder.pth')
-        
+        """Load pre-trained encoder weights."""
+        from utils import get_result_dir
+        encoder_type = args.encoder_type
+        dataset_name = self.dataset_name.lower()
+
+        if encoder_type == 'self-supervised':
+            # Path for self-supervised (autoencoder) model
+            result_dir = get_result_dir(args, 'self_supervised')
+            model_path = os.path.join(result_dir, f'{dataset_name}_autoencoder.pth')
+            expected_key = 'encoder_state_dict' 
+        elif encoder_type == 'contrastive':
+            # Path for contrastive model
+            result_dir = get_result_dir(args, 'contrastive')
+            model_path = os.path.join(result_dir, f'{dataset_name}_contrastive.pth')
+            expected_key = 'model_state_dict'
+        else:
+            raise ValueError(f"ERROR: Unknown encoder_type '{encoder_type}'")
+
+        # Print the full path to help diagnose the issue
+        print(f"Looking for pretrained {encoder_type} encoder at: {model_path}")
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"ERROR: No pretrained {encoder_type} encoder found at {model_path}. "
+                                   f"Please train the {encoder_type} model first.")
+
         try:
-            # Load the checkpoint
-            checkpoint = torch.load(autoencoder_path, map_location=args.device)
+            checkpoint = torch.load(model_path, map_location=self.device)
             
-            # Handle different checkpoint structures
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                # Extract just the encoder part
-                encoder_state_dict = {k.replace('encoder.', ''): v for k, v in checkpoint['model_state_dict'].items() 
-                                  if k.startswith('encoder.')}
-                self.encoder.load_state_dict(encoder_state_dict)
-            elif isinstance(checkpoint, dict) and 'encoder_state_dict' in checkpoint:
-                # Direct encoder state dict
-                self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-            else:
-                # Old format or direct model state dict
-                encoder_state_dict = {k.replace('encoder.', ''): v for k, v in checkpoint.items() 
-                                  if k.startswith('encoder.')}
-                self.encoder.load_state_dict(encoder_state_dict)
+            # First try loading from expected key if checkpoint is a dict
+            if isinstance(checkpoint, dict):
+                if expected_key in checkpoint:
+                    self.encoder.load_state_dict(checkpoint[expected_key])
+                    print(f"Successfully loaded encoder from '{expected_key}'")
+                    return
+                elif 'encoder_state_dict' in checkpoint:
+                    self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+                    print("Successfully loaded encoder from 'encoder_state_dict'")
+                    return
+                # Try other common keys
+                elif 'state_dict' in checkpoint:
+                    self.encoder.load_state_dict(checkpoint['state_dict'])
+                    print("Successfully loaded encoder from 'state_dict'")
+                    return
             
-            print(f"[CLASSIFIER] Successfully loaded pretrained encoder from {autoencoder_path}")
+            # If checkpoint has encoder attribute (full model object)
+            if hasattr(checkpoint, 'encoder'):
+                self.encoder.load_state_dict(checkpoint.encoder.state_dict())
+                print("Successfully loaded encoder from model object")
+                return
+            
+            # Last resort: try loading checkpoint directly as state_dict
+            try:
+                self.encoder.load_state_dict(checkpoint)
+                print("Successfully loaded encoder directly")
+                return
+            except Exception as e:
+                if isinstance(checkpoint, dict):
+                    raise ValueError(f"Could not load encoder. Available keys: {list(checkpoint.keys())}") from e
+                else:
+                    raise ValueError(f"Could not load encoder. Checkpoint type: {type(checkpoint)}") from e
+                
         except Exception as e:
-            print(f"[CLASSIFIER] ERROR: Failed to load pretrained encoder: {e}")
-            print("[CLASSIFIER] Training will continue with randomly initialized encoder")
+            raise RuntimeError(f"Failed to load pretrained {encoder_type} encoder: {str(e)}") from e
     
     def train_epoch(self):
-        """Train for one epoch"""
+        self.encoder.eval()
         self.classifier.train()
         total_loss = 0
         correct = 0
@@ -96,7 +154,7 @@ class ClassifierTrainer(BaseTrainer):
         for batch_idx, (data, targets) in enumerate(self.train_loader):
             data, targets = data.to(self.device), targets.to(self.device)
             
-            # Forward pass through encoder (with gradient disabled since it's frozen)
+            # Forward pass through encoder
             with torch.no_grad():
                 features = self.encoder(data)
 
@@ -108,7 +166,7 @@ class ClassifierTrainer(BaseTrainer):
             # Backward pass
             loss.backward()
             self.optimizer.step()
-            self.scheduler.step() # Step the scheduler each batch for OneCycleLR
+            self.scheduler.step()
 
             # Track metrics
             total_loss += loss.item()
@@ -174,56 +232,54 @@ class ClassifierTrainer(BaseTrainer):
     
     def train(self):
         """Main training loop"""
-        print(f"[CLASSIFIER] Starting training for {self.dataset_name} dataset with latent dim={self.args.latent_dim}")
+        print(f"[CLASSIFIER] Starting classifier training for {self.dataset_name}")
         print(f"[CLASSIFIER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
-        print(f"[CLASSIFIER] Saving results to: {self.result_dir}")
+        print(f"[CLASSIFIER] Results directory: {self.results_subdir}")
         
-        # Clear previous metrics
-        self.train_losses = []
-        self.val_losses = []
-        self.train_accuracies = []
-        self.val_accuracies = []
-        
-        # Set up best model tracking
-        self.best_val_acc = 0
+        # Initialize early stopping parameters
+        best_val_accuracy = 0
+        patience = 5 
+        waiting = 0
         
         # Training loop
         for epoch in range(self.epochs):
-            # Update current epoch BEFORE training
-            self.current_epoch = epoch + 1  # Start from 1 instead of 0
+            # Update current epoch
+            self.current_epoch = epoch + 1
             
             # Train and validate
-            train_loss, train_acc = self.train_epoch()
-            val_loss, val_acc = self.validate()
+            train_loss, train_accuracy = self.train_epoch()
+            val_loss, val_accuracy = self.validate()
             
-            # Store metrics - CRITICAL for plotting
+            # Track metrics
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
-            self.train_accuracies.append(train_acc)
-            self.val_accuracies.append(val_acc)
+            self.train_accuracies.append(train_accuracy)
+            self.val_accuracies.append(val_accuracy)
             
             # Print epoch summary
             print(f"[CLASSIFIER] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, "
-                  f"Train Loss: {train_loss:.6f}, Train Acc: {train_acc:.2f}%, "
-                  f"Val Loss: {val_loss:.6f}, Val Acc: {val_acc:.2f}%, "
-                  f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
+                  f"Train Loss: {train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, "
+                  f"Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}%")
             
-            # Save best model (based on validation accuracy)
-            if val_acc > self.best_val_acc:
-                self.best_val_acc = val_acc
-                self.save_checkpoint(self.classifier, self.model_save_path, epoch=epoch, accuracy=val_acc, loss=val_loss)
-                print(f"[CLASSIFIER] {self.dataset_name} - Saved model checkpoint with validation accuracy: {val_acc:.2f}%")
+            # Save best model
+            if val_accuracy > best_val_accuracy:
+                best_val_accuracy = val_accuracy
+                self.save_checkpoint(self.classifier, self.model_save_path, epoch=epoch, accuracy=val_accuracy)
+                print(f"[CLASSIFIER] {self.dataset_name} - Saved model checkpoint with validation accuracy: {val_accuracy:.2f}%")
+                waiting = 0  
+            else:
+                waiting += 1  
+            
+            # Early stopping check
+            if waiting >= patience:
+                print(f"[CLASSIFIER] Early stopping triggered - No improvement for {patience} epochs")
+                break
         
         # Evaluate on test set
         self.evaluate_test()
         
-        # Plot training curves with enhanced visualization
-        self.plot_metrics(f'{self.dataset_name.lower()}_classifier_curves.png')
-        
-        # Generate t-SNE visualization of latent space
-        print(f"[CLASSIFIER] Generating t-SNE visualization of latent space...")
-        plot_tsne(self.encoder, self.test_loader, self.device, 
-                 dataset_name=f"{self.dataset_name.lower()}_classifier")
+        plot_path = f'{self.dataset_name.lower()}_classifier_curves.png'
+        self.plot_metrics(plot_path)
         
         return self.classifier
     

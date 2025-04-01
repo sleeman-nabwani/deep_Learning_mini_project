@@ -20,6 +20,8 @@ class BaseTrainer:
         """
         self.args = args
         self.device = args.device
+        print(f"[BASE] Device: {self.device}")
+        
         self.epochs = args.epochs
         self.batch_size = args.batch_size
         self.result_dir = get_result_dir(args, training_type)

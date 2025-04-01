@@ -13,7 +13,14 @@ class AutoencoderTrainer(BaseTrainer):
     
     def __init__(self, args, setup):
         super().__init__(args, 'self_supervised')
+        
+        # Print CUDA status once during initialization
+        print(f"[AUTOENCODER] Training on: {self.device}")
+        
         self.model = setup['model']
+        # Explicitly ensure model is on the correct device
+        self.model = self.model.to(self.device)
+        
         self.dataset_name = setup['dataset_name']
         self.img_size = setup['img_size']
         self.train_loader = setup['train_loader']
@@ -201,7 +208,7 @@ class AutoencoderTrainer(BaseTrainer):
     
     def train(self):
         """Main training loop"""
-        print(f"[AUTOENCODER] Starting training for {self.dataset_name} dataset with latent dim={self.args.latent_dim}")
+        print(f"[AUTOENCODER] Starting autoencoder training for {self.dataset_name}")
         print(f"[AUTOENCODER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
         print(f"[AUTOENCODER] Saving results to: {self.result_dir}")
         
@@ -273,5 +280,14 @@ class AutoencoderTrainer(BaseTrainer):
         # Load best model for return
         best_checkpoint = torch.load(os.path.join(self.result_dir, self.model_save_path))
         self.model.load_state_dict(best_checkpoint['model_state_dict'])
+        
+        # Plot training curves
+        self.plot_metrics(f'{self.dataset_name.lower()}_autoencoder_curves.png')
+        
+        # Generate t-SNE visualization
+        print(f"[AUTOENCODER] Generating t-SNE visualization of latent space...")
+        # For autoencoder, we need to use just the encoder part for t-SNE
+        plot_tsne(self.model.encoder, self.test_loader, self.device,
+                 dataset_name=f"{self.dataset_name.lower()}_autoencoder")
         
         return self.model

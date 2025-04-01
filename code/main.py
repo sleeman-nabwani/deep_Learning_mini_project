@@ -6,16 +6,17 @@ import os
 from autoencoder_trainer import AutoencoderTrainer
 from classifier_trainer import ClassifierTrainer
 from classification_guided_trainer import ClassificationGuidedTrainer
+from contrastive_trainer import ContrastiveTrainer
 from utils import setup_datasets
 
 NUM_CLASSES = 10
 
 def freeze_seeds(seed=0):
     """Fix all random seeds for reproducibility"""
-    random.seed(seed)
-    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     
@@ -28,13 +29,23 @@ def get_args():
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', type=str, help='Default device to use')
     parser.add_argument('--mnist', action='store_true', default=False,
                         help='Whether to use MNIST (True) or CIFAR10 (False) data')
+    
+    # Training type options - only select one
     parser.add_argument('--self-supervised', action='store_true', default=False,
-                        help='Whether train self-supervised with reconstruction objective, or jointly with classifier for classification objective.')
-    parser.add_argument('--train-classifier', action='store_true', default=False,
-                        help='Whether to train a classifier on top of the pretrained encoder')
-    parser.add_argument('--epochs', default=20, type=int, help='Number of training epochs')
+                        help='Train autoencoder with reconstruction objective and then classifier')
+    parser.add_argument('--contrastive', action='store_true', default=False,
+                        help='Train encoder using contrastive learning objective and then classifier')
     parser.add_argument('--classification-guided', action='store_true', default=False,
                         help='Train encoder jointly with classifier for classification objective')
+    
+    # Standalone classifier training
+    parser.add_argument('--train-classifier', action='store_true', default=False,
+                        help='Train a classifier on top of a previously trained encoder')
+    parser.add_argument('--encoder-type', type=str, choices=['self-supervised', 'contrastive'],
+                        default='self-supervised', help='Type of encoder to use for classifier training')
+    
+    parser.add_argument('--epochs', default=20, type=int, help='Number of training epochs')
+    
     return parser.parse_args()
     
 
@@ -48,64 +59,68 @@ if __name__ == "__main__":
     # Select appropriate transform based on dataset
     dataset_name = "MNIST" if args.mnist else "CIFAR10"
     
-    print(f"=== {dataset_name} AUTOENCODER TRAINING ===")
+    print(f"=== {dataset_name} TRAINING ===")
     print(f"Dataset: {dataset_name}")
     print(f"Device: {args.device}")
     print(f"Batch size: {args.batch_size}")
     print(f"Latent dimension: {args.latent_dim}")
     print(f"Epochs: {args.epochs}")
     print(f"Data path: {args.data_path}")
-    print(f"Self-supervised mode: {args.self_supervised}")
-    print(f"Train classifier: {args.train_classifier}")
-    print(f"Classification-guided mode: {args.classification_guided}")
-    print("="*40)
     
-    # # Select appropriate transform based on dataset
-    # if args.mnist:
-    #     transform = transforms.Compose([
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(mean=[0.5], std=[0.5])
-    #     ])
-    # else:
-    #     transform = transforms.Compose([
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    #     ])
-    
-    # First train the autoencoder in self-supervised mode
+    # Train the autoencoder in self-supervised mode
     if args.self_supervised:
         print("\n=== STARTING AUTOENCODER TRAINING ===")
         setup = setup_datasets(args, model_type='autoencoder')
         trainer = AutoencoderTrainer(args, setup)
         autoencoder = trainer.train()
         print("=== AUTOENCODER TRAINING COMPLETE ===\n")
-        print("\n=== STARTING CLASSIFIER TRAINING ===")
+        
+        # Always train classifier on top of self-supervised encoder
+        print("\n=== STARTING CLASSIFIER TRAINING ON AUTOENCODER ENCODER ===")
         setup = setup_datasets(args, model_type='encoder')
+        setup['encoder'] = autoencoder.encoder  # Use the trained encoder
+        setup['encoder_type'] = 'self_supervised'
         trainer = ClassifierTrainer(args, setup)
         classifier = trainer.train()
         print("=== CLASSIFIER TRAINING COMPLETE ===\n")
-        #training the classifier on top of the pretrained encoder
-    # Classification-guided training (section 1.2.2)
-    if args.classification_guided:
+    
+    # Train using contrastive learning approach
+    elif args.contrastive:
+        print("\n=== STARTING CONTRASTIVE LEARNING TRAINING ===")
+        setup = setup_datasets(args, model_type='contrastive')
+        trainer = ContrastiveTrainer(args, setup)
+        encoder = trainer.train()
+        print("=== CONTRASTIVE LEARNING TRAINING COMPLETE ===\n")
+        
+        # Always train classifier on top of contrastive encoder
+        print("\n=== STARTING CLASSIFIER TRAINING ON CONTRASTIVE ENCODER ===")
+        setup = setup_datasets(args, model_type='encoder')
+        setup['encoder'] = encoder
+        setup['encoder_type'] = 'contrastive'
+        trainer = ClassifierTrainer(args, setup)
+        classifier = trainer.train()
+        print("=== CLASSIFIER TRAINING COMPLETE ===\n")
+    
+    # Train with classification guidance (joint training)
+    elif args.classification_guided:
         print("\n=== STARTING CLASSIFICATION-GUIDED TRAINING ===")
-        print("Training encoder jointly with classifier (no reconstruction objective)")
+        setup = setup_datasets(args, model_type='encoder')
         trainer = ClassificationGuidedTrainer(args, setup)
         encoder, classifier = trainer.train()
         print("=== CLASSIFICATION-GUIDED TRAINING COMPLETE ===\n")
     
-    print(f"\n=== ALL TRAINING COMPLETED FOR {dataset_name} ===")
-    if args.self_supervised and args.train_classifier and args.classification_guided:
-        print("All three training methods completed: autoencoder, classifier, and classification-guided")
-    elif args.self_supervised and args.train_classifier:
-        print("Both autoencoder and classifier were trained successfully")
-    elif args.self_supervised and args.classification_guided:
-        print("Both self-supervised autoencoder and classification-guided training completed")
-    elif args.train_classifier and args.classification_guided:
-        print("Both classifier training and classification-guided training completed")
-    elif args.self_supervised:
-        print("Autoencoder was trained successfully")
+    # Train only a classifier on a specified encoder type (using previously trained model)
     elif args.train_classifier:
-        print("Classifier was trained successfully") 
-    elif args.classification_guided:
-        print("Classification-guided training was completed successfully")
+        encoder_type = args.encoder_type
+        print(f"\n=== STARTING CLASSIFIER TRAINING ON PREVIOUSLY TRAINED {encoder_type.upper()} ENCODER ===")
+        
+        setup = setup_datasets(args, model_type='encoder')
+        setup['encoder_type'] = encoder_type
+        
+        trainer = ClassifierTrainer(args, setup)
+        classifier = trainer.train()
+        print("=== CLASSIFIER TRAINING COMPLETE ===\n")
+    
+    else:
+        print("No training mode specified. Please use --self-supervised, --contrastive, --classification-guided, or --train-classifier")
 

@@ -11,7 +11,13 @@ class ClassificationGuidedTrainer(BaseTrainer):
     
     def __init__(self, args, setup):
         super().__init__(args, 'classification_guided')
-        self.encoder = setup['model']  # This is the encoder
+        
+        print(f"[GUIDED] Training on: {self.device}")
+        
+        self.encoder = setup['model']  
+
+        self.encoder = self.encoder.to(self.device)
+        
         self.dataset_name = setup['dataset_name']
         self.train_loader = setup['train_loader']
         self.val_loader = setup['val_loader']

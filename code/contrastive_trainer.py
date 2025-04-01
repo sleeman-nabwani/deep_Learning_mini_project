@@ -61,7 +61,14 @@ class ContrastiveTrainer(BaseTrainer):
     
     def __init__(self, args, setup):
         super().__init__(args, 'contrastive')
+        
+        # Print CUDA status once during initialization
+        print(f"[CONTRASTIVE] Training on: {self.device}")
+        
         self.encoder = setup.get('model') or setup.get('encoder')
+
+        self.encoder = self.encoder.to(self.device)
+        
         self.dataset_name = setup['dataset_name']
         self.train_loader = setup['train_loader']
         self.val_loader = setup['val_loader']
@@ -77,7 +84,7 @@ class ContrastiveTrainer(BaseTrainer):
             nn.BatchNorm1d(512), 
             nn.ReLU(inplace=True),
             nn.Linear(512, 128)
-        ).to(args.device)
+        ).to(self.device)  # Ensure this is on the correct device
         
         self.temperature = 0.1 
         self.criterion = NTXentLoss(temperature=self.temperature)
