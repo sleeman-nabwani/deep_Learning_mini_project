@@ -211,7 +211,7 @@ def get_result_dir(args, model_type, preTrained=False):
         os.makedirs('results')
     # Determine dataset name from args.mnist flag
     dataset_name = 'mnist' if args.mnist else 'cifar10'
-    if args.is_classifier and not preTrained:
+    if model_type == 'classifier' and not preTrained:
         result_dir = os.path.join('results', 'classifier', args.encoder_type, dataset_name)
     else:
         result_dir = os.path.join('results', model_type, dataset_name)
