@@ -5,7 +5,23 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from base_trainer import BaseTrainer
+from models import MNISTEncoder, CIFAR10Encoder, Classifier
 from utils import get_result_dir
+
+
+def mixup_data(x, y, alpha=0.2, device='cuda'):
+    """Applies mixup augmentation to a batch of features and labels."""
+    # Sample lambda from beta distribution
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size).to(device)
+    # Mix the features
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index] 
+    return mixed_x, y_a, y_b, lam
 
 class ClassifierTrainer(BaseTrainer):
     """Trainer for classifier on top of frozen encoder"""
@@ -23,13 +39,8 @@ class ClassifierTrainer(BaseTrainer):
         self.test_loader = setup['test_loader']
         self.num_classes = 10
         self.is_mnist = 'mnist' in self.dataset_name.lower()
-        
         # Determine encoder type from args
-        self.encoder_type = args.encoder_type
-        
-        # Create the appropriate encoder architecture based on dataset
-        from models import MNISTEncoder, CIFAR10Encoder, Classifier
-        
+        self.encoder_type = args.encoder_type       
         # Initialize the correct encoder architecture
         if self.is_mnist:
             self.encoder = MNISTEncoder(latent_dim=args.latent_dim).to(self.device)
@@ -37,7 +48,6 @@ class ClassifierTrainer(BaseTrainer):
             self.encoder = CIFAR10Encoder(latent_dim=args.latent_dim).to(self.device)
         
         # Create the classifier
-        from models import Classifier
         self.classifier = Classifier(args.latent_dim, self.num_classes).to(args.device)
         
         # Load pre-trained encoder weights
@@ -48,7 +58,7 @@ class ClassifierTrainer(BaseTrainer):
             param.requires_grad = False
         self.encoder.eval()
         
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.2)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.15)
         
         self.optimizer = optim.AdamW(
             self.classifier.parameters(), 
@@ -65,11 +75,6 @@ class ClassifierTrainer(BaseTrainer):
             final_div_factor=100
         )
         
-        # Create result directory structure
-        self.results_subdir = f'results/classifier/{self.encoder_type}/{self.dataset_name.lower()}'
-        os.makedirs(self.results_subdir, exist_ok=True)
-        
-        self.result_dir = self.results_subdir
         self.model_save_path = f'{self.dataset_name.lower()}_classifier.pth'
         
         # Track per-class accuracies
@@ -78,19 +83,18 @@ class ClassifierTrainer(BaseTrainer):
     
     def load_pretrained_encoder(self, args):
         """Load pre-trained encoder weights."""
-        from utils import get_result_dir
         encoder_type = args.encoder_type
         dataset_name = self.dataset_name.lower()
 
-        if encoder_type == 'self-supervised':
+        if encoder_type == 'self_supervised':
             # Path for self-supervised (autoencoder) model
-            result_dir = get_result_dir(args, 'self_supervised')
-            model_path = os.path.join(result_dir, f'{dataset_name}_autoencoder.pth')
+            model_path = get_result_dir(args, 'self_supervised', True)
+            model_path = os.path.join(model_path, f'{dataset_name}_autoencoder.pth')
             expected_key = 'encoder_state_dict' 
         elif encoder_type == 'contrastive':
             # Path for contrastive model
-            result_dir = get_result_dir(args, 'contrastive')
-            model_path = os.path.join(result_dir, f'{dataset_name}_contrastive.pth')
+            model_path = get_result_dir(args, 'contrastive', True)
+            model_path = os.path.join(model_path, f'{dataset_name}_contrastive.pth')
             expected_key = 'model_state_dict'
         else:
             raise ValueError(f"ERROR: Unknown encoder_type '{encoder_type}'")
@@ -157,11 +161,18 @@ class ClassifierTrainer(BaseTrainer):
             # Forward pass through encoder
             with torch.no_grad():
                 features = self.encoder(data)
-
-            # Forward pass through classifier
             self.optimizer.zero_grad()
-            outputs = self.classifier(features)
-            loss = self.criterion(outputs, targets)
+            if np.random.random() > 0.5:
+                # Get mixed features and mixed targets
+                mixed_features, targets_a, targets_b, lam = mixup_data(
+                    features, targets, alpha=0.2, device=self.device
+                )
+                
+                outputs = self.classifier(mixed_features)
+                loss = lam * self.criterion(outputs, targets_a) + (1 - lam) * self.criterion(outputs, targets_b)
+            else:
+                outputs = self.classifier(features)
+                loss = self.criterion(outputs, targets)
             
             # Backward pass
             loss.backward()
@@ -185,7 +196,7 @@ class ClassifierTrainer(BaseTrainer):
         # Calculate epoch metrics AFTER the loop
         epoch_loss = total_loss / len(self.train_loader)
         epoch_acc = 100. * correct / total
-
+        
         return epoch_loss, epoch_acc
     
     def validate(self):
@@ -234,7 +245,7 @@ class ClassifierTrainer(BaseTrainer):
         """Main training loop"""
         print(f"[CLASSIFIER] Starting classifier training for {self.dataset_name}")
         print(f"[CLASSIFIER] Training on {self.device} with batch size {self.batch_size} for {self.epochs} epochs")
-        print(f"[CLASSIFIER] Results directory: {self.results_subdir}")
+        print(f"[CLASSIFIER] Results directory: {self.result_dir}")
         
         # Initialize early stopping parameters
         best_val_accuracy = 0

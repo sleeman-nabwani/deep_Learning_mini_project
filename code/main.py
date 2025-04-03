@@ -67,6 +67,11 @@ if __name__ == "__main__":
     print(f"Epochs: {args.epochs}")
     print(f"Data path: {args.data_path}")
     
+    # Normalize encoder type
+    if args.encoder_type == 'self-supervised':
+        args.encoder_type = 'self_supervised'
+    args.is_classifier = False
+    
     # Train the autoencoder in self-supervised mode
     if args.self_supervised:
         print("\n=== STARTING AUTOENCODER TRAINING ===")
@@ -97,6 +102,7 @@ if __name__ == "__main__":
         setup = setup_datasets(args, model_type='encoder')
         setup['encoder'] = encoder
         setup['encoder_type'] = 'contrastive'
+        args.encoder_type = 'contrastive'
         trainer = ClassifierTrainer(args, setup)
         classifier = trainer.train()
         print("=== CLASSIFIER TRAINING COMPLETE ===\n")
@@ -104,7 +110,7 @@ if __name__ == "__main__":
     # Train with classification guidance (joint training)
     elif args.classification_guided:
         print("\n=== STARTING CLASSIFICATION-GUIDED TRAINING ===")
-        setup = setup_datasets(args, model_type='encoder')
+        setup = setup_datasets(args, model_type='classification_guided')
         trainer = ClassificationGuidedTrainer(args, setup)
         encoder, classifier = trainer.train()
         print("=== CLASSIFICATION-GUIDED TRAINING COMPLETE ===\n")
@@ -112,6 +118,7 @@ if __name__ == "__main__":
     # Train only a classifier on a specified encoder type (using previously trained model)
     elif args.train_classifier:
         encoder_type = args.encoder_type
+        args.is_classifier = True
         print(f"\n=== STARTING CLASSIFIER TRAINING ON PREVIOUSLY TRAINED {encoder_type.upper()} ENCODER ===")
         
         setup = setup_datasets(args, model_type='encoder')

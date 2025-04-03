@@ -82,7 +82,6 @@ class CIFAR10Encoder(nn.Module):
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
         
-        # Downsampling blocks with residual connections
         # Block 1: 32x32 -> 16x16
         self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)
         self.bn2 = nn.BatchNorm2d(128)
@@ -188,14 +187,14 @@ class Classifier(nn.Module):
         self.fc1 = nn.Linear(latent_dim, 512)
         nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='relu')
         self.bn1 = nn.BatchNorm1d(512)
-        self.dropout1 = nn.Dropout(0.4)
+        self.dropout1 = nn.Dropout(0.1)
         
         # Residual block for better feature learning
         self.residual1 = nn.Sequential(
             nn.Linear(512, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
+            nn.Dropout(0.1),
             nn.Linear(512, 512),
             nn.BatchNorm1d(512)
         )
@@ -204,7 +203,7 @@ class Classifier(nn.Module):
         self.fc2 = nn.Linear(512, 256)
         nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='relu')
         self.bn2 = nn.BatchNorm1d(256)
-        self.dropout2 = nn.Dropout(0.4)
+        self.dropout2 = nn.Dropout(0.1)
         
         # Output layer
         self.fc3 = nn.Linear(256, num_classes)

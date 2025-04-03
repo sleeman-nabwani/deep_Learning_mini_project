@@ -93,10 +93,18 @@ def setup_datasets(args, model_type='encoder'):
             augmentations = [
                 transforms.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.9, 1.1))
             ]
-        else: # Default/Classifier
-             augmentations = [] # Or minimal augmentations if desired for classifier training data
-
-    else: # CIFAR10
+        elif model_type == 'classification_guided':
+            # Stronger augmentations for classification-guided training
+            augmentations = [
+                transforms.RandomAffine(degrees=15, translate=(0.15, 0.15), scale=(0.85, 1.15)),
+                transforms.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3))
+            ]
+        else:  
+            # Basic augmentations for classifier training data
+            augmentations = [
+                transforms.RandomAffine(degrees=10, translate=(0.1, 0.1))
+            ]
+    else:  # CIFAR10
         dataset_config = {
             'name': "CIFAR10",
             'img_size': 32,
@@ -108,12 +116,10 @@ def setup_datasets(args, model_type='encoder'):
             'model_class': CIFAR10Autoencoder if model_type == 'autoencoder' else CIFAR10Encoder
         }
         
-        # Enhanced CIFAR10 augmentations 
+        #CIFAR10 augmentations
         if model_type == 'contrastive':
-            # NO augmentations here for contrastive; trainer handles it
             augmentations = []
         elif model_type == 'autoencoder':
-            # Augmentations for autoencoder training
             augmentations = [
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomApply([
@@ -121,11 +127,16 @@ def setup_datasets(args, model_type='encoder'):
                 ], p=0.8),
                 transforms.RandomGrayscale(p=0.2)
             ]
-        else: # Default/Classifier
-            # Basic augmentations for classifier training data
+        elif model_type == 'classification_guided':
+            augmentations = [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
+            ]
+        else:  
             augmentations = [
                 transforms.RandomHorizontalFlip(),
-                # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2) # Optional basic jitter
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)
             ]
 
     # Create transforms
@@ -134,12 +145,22 @@ def setup_datasets(args, model_type='encoder'):
         transforms.Normalize(mean=dataset_config['mean'], std=dataset_config['std'])
     ])
     
-    train_transform = transforms.Compose(
-        augmentations + [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=dataset_config['mean'], std=dataset_config['std'])
-        ]
-    )
+    # For classification-guided training specifically
+    if model_type == 'classification_guided':
+        train_transform = transforms.Compose(
+            augmentations + [
+                transforms.ToTensor(),
+                transforms.Normalize(mean=dataset_config['mean'], std=dataset_config['std']),
+                transforms.RandomErasing(p=0.3, scale=(0.02, 0.33), ratio=(0.3, 3.3))
+            ]
+        )
+    else:
+        train_transform = transforms.Compose(
+            augmentations + [
+                transforms.ToTensor(),
+                transforms.Normalize(mean=dataset_config['mean'], std=dataset_config['std'])
+            ]
+        )
     
     # Create datasets
     train_dataset = dataset_config['dataset_class'](
@@ -158,11 +179,10 @@ def setup_datasets(args, model_type='encoder'):
     val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
     
-    # Create model instance (ensure this happens correctly)
+    # Create model instance 
     model_constructor = dataset_config['model_class']
     model = model_constructor(args.latent_dim).to(args.device)
     
-    # Construct the return dictionary
     setup = {
         'dataset_name': dataset_config['name'],
         'train_loader': train_loader,
@@ -181,22 +201,19 @@ def setup_datasets(args, model_type='encoder'):
     
     return setup
 
-def get_result_dir(args, model_type):
+def get_result_dir(args, model_type, preTrained=False):
     """Get the appropriate results directory based on model type and dataset"""
-    # Standardize model_type naming: replace hyphen with underscore
-    if model_type == 'self-supervised':
-        model_type = 'self_supervised'  # Convert to consistent underscore format
-    
     # Create the base results directory if it doesn't exist
+    model_type = model_type.replace('-', '_')
+    
     if not os.path.exists('results'):
         os.makedirs('results')
-    
     # Determine dataset name from args.mnist flag
     dataset_name = 'mnist' if args.mnist else 'cifar10'
-    
-    # Create the full path: results/model_type/dataset_name/
-    result_dir = os.path.join('results', model_type, dataset_name)
-    
+    if args.is_classifier and not preTrained:
+        result_dir = os.path.join('results', 'classifier', args.encoder_type, dataset_name)
+    else:
+        result_dir = os.path.join('results', model_type, dataset_name)
     # Create the directory if it doesn't exist
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)

@@ -42,7 +42,6 @@ class NTXentLoss(nn.Module):
         sim_j_i = torch.diag(similarity_matrix, -batch_size) 
         #similarities between augmented pairs
         positives = torch.cat([sim_i_j, sim_j_i], dim=0)
-        
         # Create mask to identify the negative samples
         mask = ~torch.eye(2 * batch_size, dtype=bool, device=device) 
         #isolate only the negatives
@@ -86,7 +85,7 @@ class ContrastiveTrainer(BaseTrainer):
             nn.Linear(512, 128)
         ).to(self.device)  # Ensure this is on the correct device
         
-        self.temperature = 0.1 
+        self.temperature = 0.05 
         self.criterion = NTXentLoss(temperature=self.temperature)
         
         # Optimizer for both encoder and projection head
@@ -152,18 +151,21 @@ class ContrastiveTrainer(BaseTrainer):
         total_loss = 0
         
         for batch_idx, (data, _) in enumerate(self.train_loader):
-            data = data.to(self.device)
             batch_size = data.size(0)
             
+            # Original view
+            views = [data]
 
-            views = [data] 
-            
-            # Add augmented views
-            num_augmented_views = 3 
-            for _ in range(num_augmented_views):
-                views.append(torch.stack([self.augment(img) for img in data]))
+            # Create augmented views more efficiently
+            for _ in range(3):
+                # Process entire batch on CPU first
+                augmented_cpu = torch.stack([self.augment(img) for img in data])
+                # Then move to GPU once
+                augmented = augmented_cpu.to(self.device)
+                views.append(augmented)
             
             # Get embeddings for all views
+            views = [view.to(self.device) for view in views]
             projections = []
             for view in views:
                 z = self.encoder(view)
@@ -191,7 +193,7 @@ class ContrastiveTrainer(BaseTrainer):
             # Accumulate loss
             total_loss += loss.item()
             
-            if batch_idx % 50 == 0:
+            if batch_idx % 100 == 0:
                 print(f'[CONTRASTIVE] Epoch: {self.current_epoch} | '
                       f'Batch: {batch_idx}/{len(self.train_loader)} | '
                       f'Loss: {loss.item():.4f} | '
