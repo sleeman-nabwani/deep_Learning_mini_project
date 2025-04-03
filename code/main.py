@@ -23,7 +23,7 @@ def freeze_seeds(seed=0):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', default=0, type=int, help='Seed for random number generators')
-    parser.add_argument('--data-path', default="./datasets", type=str, help='Path to dataset')
+    parser.add_argument('--data-path', default="/datasets/cv_datasets/data", type=str, help='Path to dataset')
     parser.add_argument('--batch-size', default=64, type=int, help='Size of each batch')
     parser.add_argument('--latent-dim', default=128, type=int, help='encoding dimension')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', type=str, help='Default device to use')
