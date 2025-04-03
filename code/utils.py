@@ -96,8 +96,7 @@ def setup_datasets(args, model_type='encoder'):
         elif model_type == 'classification_guided':
             # Stronger augmentations for classification-guided training
             augmentations = [
-                transforms.RandomAffine(degrees=15, translate=(0.15, 0.15), scale=(0.85, 1.15)),
-                transforms.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3))
+                transforms.RandomAffine(degrees=15, translate=(0.15, 0.15), scale=(0.85, 1.15))
             ]
         else:  
             # Basic augmentations for classifier training data
