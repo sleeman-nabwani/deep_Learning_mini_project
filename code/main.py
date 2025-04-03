@@ -85,6 +85,8 @@ if __name__ == "__main__":
         setup = setup_datasets(args, model_type='encoder')
         setup['encoder'] = autoencoder.encoder  # Use the trained encoder
         setup['encoder_type'] = 'self_supervised'
+        args.encoder_type = 'self_supervised'
+        args.is_classifier = True
         trainer = ClassifierTrainer(args, setup)
         classifier = trainer.train()
         print("=== CLASSIFIER TRAINING COMPLETE ===\n")
@@ -103,6 +105,7 @@ if __name__ == "__main__":
         setup['encoder'] = encoder
         setup['encoder_type'] = 'contrastive'
         args.encoder_type = 'contrastive'
+        args.is_classifier = True
         trainer = ClassifierTrainer(args, setup)
         classifier = trainer.train()
         print("=== CLASSIFIER TRAINING COMPLETE ===\n")

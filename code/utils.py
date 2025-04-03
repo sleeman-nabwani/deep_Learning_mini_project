@@ -131,7 +131,8 @@ def setup_datasets(args, model_type='encoder'):
             augmentations = [
                 transforms.RandomCrop(32, padding=4),
                 transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+                transforms.RandomGrayscale(p=0.2)
             ]
         else:  
             augmentations = [

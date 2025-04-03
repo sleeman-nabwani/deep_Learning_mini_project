@@ -35,6 +35,7 @@ class BaseTrainer:
         self.best_val_metric = float('inf')
         self.best_val_acc = 0.0 
         self.current_epoch = 0
+        self.test_accuracy = None
         
     def save_checkpoint(self, model, filename, **kwargs):
         """Save model checkpoint with additional data"""
@@ -90,6 +91,10 @@ class BaseTrainer:
         print(f"[DEBUG] Train accuracies: {len(self.train_accuracies)} points, values: {self.train_accuracies}")
         print(f"[DEBUG] Val accuracies: {len(self.val_accuracies)} points, values: {self.val_accuracies}")
         
+        # Only print test accuracy if it exists
+        if hasattr(self, 'test_accuracy') and self.test_accuracy is not None:
+            print(f"[DEBUG] Final test accuracy: {self.test_accuracy:.2f}%")
+        
         # Create figure with better settings
         plt.figure(figsize=(16, 8))
         plt.style.use('seaborn-v0_8-darkgrid')  # Use a better style
@@ -123,15 +128,30 @@ class BaseTrainer:
             plt.subplot(1, 2, 2)
             plt.plot(epochs, self.train_accuracies, 'o-', color='green', linewidth=2, label='Training Accuracy')
             plt.plot(epochs, self.val_accuracies, 'o-', color='red', linewidth=2, label='Validation Accuracy')
+            
+            # Add test accuracy ONLY if it exists and isn't None
+            has_test_accuracy = hasattr(self, 'test_accuracy') and self.test_accuracy is not None
+            if has_test_accuracy:
+                # Add a horizontal line for the test accuracy across the entire x-axis
+                plt.axhline(y=self.test_accuracy, color='purple', linestyle='--', linewidth=2, 
+                           label=f'Test Accuracy: {self.test_accuracy:.2f}%')
+                # Also add a text annotation
+                plt.text(0.5, self.test_accuracy + 1.0, f'Test: {self.test_accuracy:.2f}%', 
+                        color='purple', fontweight='bold', ha='center', va='bottom')
+            
             plt.xlabel('Epoch', fontsize=12)
             plt.ylabel('Accuracy (%)', fontsize=12)
             plt.title('Training and Validation Accuracy', fontsize=14, fontweight='bold')
             plt.grid(True, linestyle='--', alpha=0.7)
             plt.legend(fontsize=12)
             
-            # Calculate appropriate y-axis limits for accuracy plot
-            min_acc = max(0, min(min(self.train_accuracies), min(self.val_accuracies)) * 0.9)
-            max_acc = min(100, max(max(self.train_accuracies), max(self.val_accuracies)) * 1.1)
+            # Calculate appropriate y-axis limits for accuracy plot, including test accuracy if available
+            acc_values = self.train_accuracies + self.val_accuracies
+            if has_test_accuracy:
+                acc_values.append(self.test_accuracy)
+            
+            min_acc = max(0, min(acc_values) * 0.9)
+            max_acc = min(100, max(acc_values) * 1.1)
             plt.ylim(min_acc, max_acc)
             
             # Add value annotations

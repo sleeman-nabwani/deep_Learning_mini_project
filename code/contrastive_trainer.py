@@ -83,7 +83,7 @@ class ContrastiveTrainer(BaseTrainer):
             nn.BatchNorm1d(512), 
             nn.ReLU(inplace=True),
             nn.Linear(512, 128)
-        ).to(self.device)  # Ensure this is on the correct device
+        ).to(self.device)
         
         self.temperature = 0.05 
         self.criterion = NTXentLoss(temperature=self.temperature)
@@ -139,8 +139,6 @@ class ContrastiveTrainer(BaseTrainer):
                 ], p=0.8),
                 transforms.RandomGrayscale(p=0.2),
                 transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))], p=0.5),
-                
-                # Add random erasing for occlusion robustness
                 transforms.RandomErasing(p=0.3, scale=(0.02, 0.33))
             ])
    

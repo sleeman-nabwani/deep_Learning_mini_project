@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import os
 from base_trainer import BaseTrainer
 from utils import plot_tsne
+import numpy as np
 
 class ClassificationGuidedTrainer(BaseTrainer):
     """Trainer for joint encoder and classifier (classification-guided training)"""
@@ -14,7 +15,7 @@ class ClassificationGuidedTrainer(BaseTrainer):
         
         print(f"[GUIDED] Training on: {self.device}")
         
-        self.encoder = setup['model']
+        self.encoder = setup['model']  
 
         self.encoder = self.encoder.to(self.device)
         
@@ -31,22 +32,13 @@ class ClassificationGuidedTrainer(BaseTrainer):
         # Initialize training components
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
         
-        # Unlike classifier training, we train both encoder and classifier
         self.optimizer = optim.AdamW([
             {'params': self.encoder.parameters()},
             {'params': self.classifier.parameters()}
         ], lr=0.001, weight_decay=1e-4)
         
-        # learning rate scheduler:
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            self.optimizer,
-            max_lr=0.005,  
-            steps_per_epoch=len(self.train_loader),
-            epochs=self.epochs,
-            pct_start=0.3,  
-            anneal_strategy='cos',
-            final_div_factor=10  
-        )
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.epochs, eta_min=1e-6)
         
         # File naming
         self.model_save_path = f'{self.dataset_name.lower()}_guided.pth'
@@ -55,37 +47,41 @@ class ClassificationGuidedTrainer(BaseTrainer):
         """Train for one epoch"""
         self.encoder.train()
         self.classifier.train()
-        epoch_loss = 0
+        total_loss = 0
         correct = 0
         total = 0
         
         for batch_idx, (data, targets) in enumerate(self.train_loader):
             data, targets = data.to(self.device), targets.to(self.device)
             
+            # Forward pass
             self.optimizer.zero_grad()
             features = self.encoder(data)
+            features = F.normalize(features, p=2, dim=1)
             outputs = self.classifier(features)
             loss = self.criterion(outputs, targets)
             
+            # Backward pass
             loss.backward()
             self.optimizer.step()
-            self.scheduler.step() 
             
-            
-            epoch_loss += loss.item()
+            # Track metrics
+            total_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
             
-            # Print progress
+            # Print batch progress
             if batch_idx % 100 == 0:
-                current_lr = self.scheduler.get_last_lr()[0]  # Get current learning rate
-                current_acc = 100. * correct / total
-                print(f'[GUIDED] {self.dataset_name} - Epoch: {self.current_epoch}/{self.epochs}, Batch: {batch_idx}/{len(self.train_loader)}, '
-                     f'Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%, LR: {current_lr:.6f}')
+                current_acc = 100. * correct / total if total > 0 else 0
+                print(f"[GUIDED] {self.dataset_name} - Epoch: {len(self.train_losses) + 1}/{self.epochs}, "
+                      f"Batch: {batch_idx}/{len(self.train_loader)}, "
+                      f"Loss: {loss.item():.6f}, Current Train Acc: {current_acc:.2f}%, "
+                      f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
         
+        # Calculate epoch metrics
+        epoch_loss = total_loss / len(self.train_loader)
         epoch_acc = 100. * correct / total
-        epoch_loss /= len(self.train_loader)
         
         return epoch_loss, epoch_acc
     
@@ -149,7 +145,10 @@ class ClassificationGuidedTrainer(BaseTrainer):
             # Train and validate
             train_loss, train_acc = self.train_epoch()
             val_loss, val_acc = self.validate()
-                      
+            
+            # Step the scheduler
+            self.scheduler.step()
+            
             # Store metrics
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
@@ -177,16 +176,16 @@ class ClassificationGuidedTrainer(BaseTrainer):
                 )
                 print(f"[GUIDED] {self.dataset_name} - Saved model checkpoint with validation accuracy: {val_acc:.2f}%")
         
-        # Plot training curves
-        self.plot_metrics(f'{self.dataset_name.lower()}_guided_curves.png')
-        
         # Load best model for evaluation
         checkpoint = self.load_checkpoint(self.encoder, self.model_save_path)
         if 'classifier_state_dict' in checkpoint:
             self.classifier.load_state_dict(checkpoint['classifier_state_dict'])
         
         # Evaluate on test set
-        self.evaluate_test()
+        self.test_accuracy = self.evaluate_test()
+        
+        # Plot training curves
+        self.plot_metrics(f'{self.dataset_name.lower()}_guided_curves.png')
         
         # Generate t-SNE visualization
         plot_tsne(self.encoder, self.test_loader, self.device, 

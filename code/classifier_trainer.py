@@ -287,7 +287,7 @@ class ClassifierTrainer(BaseTrainer):
                 break
         
         # Evaluate on test set
-        self.evaluate_test()
+        self.test_accuracy = self.evaluate_test()
         
         plot_path = f'{self.dataset_name.lower()}_classifier_curves.png'
         self.plot_metrics(plot_path)
