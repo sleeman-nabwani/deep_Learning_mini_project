@@ -129,9 +129,7 @@ class BaseTrainer:
             plt.plot(epochs, self.train_accuracies, 'o-', color='green', linewidth=2, label='Training Accuracy')
             plt.plot(epochs, self.val_accuracies, 'o-', color='red', linewidth=2, label='Validation Accuracy')
             
-            # Add test accuracy ONLY if it exists and isn't None
-            has_test_accuracy = hasattr(self, 'test_accuracy') and self.test_accuracy is not None
-            if has_test_accuracy:
+            if self.test_accuracy is not None:
                 # Add a horizontal line for the test accuracy across the entire x-axis
                 plt.axhline(y=self.test_accuracy, color='purple', linestyle='--', linewidth=2, 
                            label=f'Test Accuracy: {self.test_accuracy:.2f}%')
@@ -147,7 +145,7 @@ class BaseTrainer:
             
             # Calculate appropriate y-axis limits for accuracy plot, including test accuracy if available
             acc_values = self.train_accuracies + self.val_accuracies
-            if has_test_accuracy:
+            if self.test_accuracy is not None:
                 acc_values.append(self.test_accuracy)
             
             min_acc = max(0, min(acc_values) * 0.9)

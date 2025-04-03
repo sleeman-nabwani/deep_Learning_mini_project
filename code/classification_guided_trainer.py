@@ -229,3 +229,4 @@ class ClassificationGuidedTrainer(BaseTrainer):
         for i in range(self.num_classes):
             class_acc = 100. * class_correct[i] / class_total[i] if class_total[i] > 0 else 0
             print(f"    Class {i}: {class_acc:.2f}%")
+        return test_acc
