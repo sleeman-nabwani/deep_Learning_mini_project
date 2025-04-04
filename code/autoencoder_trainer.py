@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from base_trainer import BaseTrainer
 from utils import plot_tsne
-from interpolation import get_mnist_sample_pair, perform_interpolation, save_interpolation_results
 
 class AutoencoderTrainer(BaseTrainer):
     """Trainer for self-supervised autoencoder"""
