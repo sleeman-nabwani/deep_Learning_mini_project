@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from base_trainer import BaseTrainer
 from utils import plot_tsne
+from interpolation import get_mnist_sample_pair, perform_interpolation, save_interpolation_results
 
 class AutoencoderTrainer(BaseTrainer):
     """Trainer for self-supervised autoencoder"""
@@ -140,18 +141,19 @@ class AutoencoderTrainer(BaseTrainer):
         
         return val_loss
     
-    def plot_reconstructions(self, num_images=10):
+    def plot_reconstructions(self, num_images=5):
         """Plot original and reconstructed images"""
         model, device = self.model, self.device
         model.eval()
         
         # Get batch from test loader
         dataiter = iter(self.test_loader)
-        images, _ = next(dataiter)
+        images, labels = next(dataiter)
         
         with torch.no_grad():
             # Select subset of images
             images = images[:num_images].to(device)
+            batch_labels = labels[:num_images]
             
             # Get reconstructions
             reconstructions = model(images)
@@ -162,27 +164,27 @@ class AutoencoderTrainer(BaseTrainer):
                                                mode='bilinear', align_corners=False)
             
             # Convert to numpy for plotting
-            images = images.cpu().numpy()
-            reconstructions = reconstructions.cpu().numpy()
+            images_np = images.cpu().numpy()
+            reconstructions_np = reconstructions.cpu().numpy()
 
             # Adjust shape for plotting
             if self.is_mnist:
                 # MNIST has 1 channel
-                images = images.reshape(-1, 28, 28)
-                reconstructions = reconstructions.reshape(-1, 28, 28)
+                images_np = images_np.reshape(-1, 28, 28)
+                reconstructions_np = reconstructions_np.reshape(-1, 28, 28)
             else:
                 # CIFAR10 has 3 channels
-                images = np.transpose(images, (0, 2, 3, 1))
-                reconstructions = np.transpose(reconstructions, (0, 2, 3, 1))
+                images_np = np.transpose(images_np, (0, 2, 3, 1))
+                reconstructions_np = np.transpose(reconstructions_np, (0, 2, 3, 1))
                 
                 # De-normalize if needed
-                if images.min() < 0:
-                    images = (images + 1) / 2
-                    reconstructions = (reconstructions + 1) / 2
+                if images_np.min() < 0:
+                    images_np = (images_np + 1) / 2
+                    reconstructions_np = (reconstructions_np + 1) / 2
                 
                 # Clip to valid range
-                images = np.clip(images, 0, 1)
-                reconstructions = np.clip(reconstructions, 0, 1)
+                images_np = np.clip(images_np, 0, 1)
+                reconstructions_np = np.clip(reconstructions_np, 0, 1)
         
         # Create figure
         fig, axes = plt.subplots(2, num_images, figsize=(num_images*2, 4))
@@ -190,11 +192,11 @@ class AutoencoderTrainer(BaseTrainer):
         # Plot original images
         for i in range(num_images):
             if self.is_mnist:
-                axes[0, i].imshow(images[i], cmap='gray')
-                axes[1, i].imshow(reconstructions[i], cmap='gray')
+                axes[0, i].imshow(images_np[i], cmap='gray')
+                axes[1, i].imshow(reconstructions_np[i], cmap='gray')
             else:
-                axes[0, i].imshow(images[i])
-                axes[1, i].imshow(reconstructions[i])
+                axes[0, i].imshow(images_np[i])
+                axes[1, i].imshow(reconstructions_np[i])
             
             axes[0, i].axis('off')
             axes[1, i].axis('off')
@@ -205,6 +207,53 @@ class AutoencoderTrainer(BaseTrainer):
         plt.tight_layout()
         plt.savefig(os.path.join(self.result_dir, f'{self.dataset_name.lower()}_reconstructions.png'))
         plt.close()
+        
+        if self.is_mnist:
+            idx1, idx2 = 0, 1
+            
+            for i in range(num_images):
+                for j in range(i+1, num_images):
+                    if batch_labels[i].item() != batch_labels[j].item():
+                        idx1, idx2 = i, j
+                        break
+                if idx1 != 0 or idx2 != 1:
+                    break
+                
+            img1, img2 = images[idx1], images[idx2]
+            label1, label2 = batch_labels[idx1].item(), batch_labels[idx2].item()
+            
+            interpolated_outputs = []
+            alphas = torch.linspace(0, 1, 10)
+            
+            with torch.no_grad():
+                z1 = model.encoder(img1.unsqueeze(0))
+                z2 = model.encoder(img2.unsqueeze(0))
+                
+                for alpha in alphas:
+                    z = (1 - alpha) * z1 + alpha * z2
+                    x_recon = model.decoder(z)
+                    interpolated_outputs.append(x_recon.squeeze(0))
+            
+            save_dir = os.path.join(self.result_dir, "interpolations")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            fig, axes = plt.subplots(1, len(interpolated_outputs), figsize=(2 * len(interpolated_outputs), 2))
+            fig.suptitle(f"MNIST Linear Interpolation: Label {label1} → {label2}", fontsize=14)
+
+            for i, recon_img in enumerate(interpolated_outputs):
+                recon_img_np = recon_img.cpu().numpy()
+                recon_img_np = recon_img_np.reshape(28, 28)
+                axes[i].imshow(recon_img_np, cmap="gray")
+                axes[i].axis("off")
+                axes[i].set_title(f"α={alphas[i]:.2f}")
+
+            plt.tight_layout()
+            save_file = os.path.join(save_dir, f"mnist_linear_interp_from_vis_{label1}_to_{label2}.png")
+            plt.savefig(save_file, dpi=300)
+            plt.close()
+            
+            print(f"[AUTOENCODER] Created MNIST interpolation from label {label1} to {label2}")
+            print(f"[AUTOENCODER] Saved to {save_file}")
     
     def train(self):
         """Main training loop"""
@@ -273,7 +322,7 @@ class AutoencoderTrainer(BaseTrainer):
         self.plot_metrics(f'{self.dataset_name.lower()}_autoencoder_curves.png')
         
         # Generate t-SNE visualization
-        print(f"[AUTOENCODER] Generating t-SNE visualization of latent space...")
+        print("[AUTOENCODER] Generating t-SNE visualization of latent space...")
         # For autoencoder, we need to use just the encoder part for t-SNE
         plot_tsne(self.model.encoder, self.test_loader, self.device,
                  dataset_name=f"{self.dataset_name.lower()}_autoencoder")

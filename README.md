@@ -1,14 +1,42 @@
-# Self-Supervised Autoencoder Implementation
+# Neural Network Training Framework
 
-This repository contains the implementation of a self-supervised autoencoder for image classification using MNIST and CIFAR10 datasets.
+A comprehensive framework for training various neural network architectures with a focus on representation learning methods. This project supports different training approaches for both MNIST and CIFAR10 datasets.
+
+## Features
+
+- **Multiple Training Methods**:
+  - Self-supervised learning (autoencoder)
+  - Contrastive learning 
+  - Classification-guided learning
+  - Standard supervised classification
+
+- **Supported Datasets**:
+  - MNIST
+  - CIFAR10
+
+- **Visualization Tools**:
+  - Training/validation metric plots
+  - t-SNE visualization for latent spaces
+  - Reconstruction visualization for autoencoders
+
+- **Training Features**:
+  - Model checkpointing
+  - Learning rate scheduling
+  - Data augmentation
+  - Per-class accuracy tracking
 
 ## Project Structure
 
-- `code/models.py`: Contains the encoder, decoder, and classifier model architectures for both MNIST and CIFAR10 datasets.
-- `code/train_autoencoder.py`: Contains the code for training the autoencoder in self-supervised mode.
-- `code/train_classifier.py`: Contains the code for training a classifier on top of the pre-trained encoder.
-- `code/main.py`: Main script to run training for either autoencoder or classifier.
-- `code/utils.py`: Contains utility functions for visualization.
+- `main.py`: Entry point for training
+- `base_trainer.py`: Base class for all trainers
+- `autoencoder_trainer.py`: Self-supervised autoencoder training
+- `contrastive_trainer.py`: Contrastive learning implementation
+- `classifier_trainer.py`: Supervised classifier training
+- `classification_guided_trainer.py`: Joint encoder-classifier training
+- `models.py`: Model architecture definitions
+- `utils.py`: Utility functions and dataset setup
+
+Results are saved under:
 
 ## Requirements
 
