@@ -265,18 +265,6 @@ class AutoencoderTrainer(BaseTrainer):
             if self.current_epoch == self.epochs:
                 self.plot_reconstructions()
                 
-                # Plot loss curves
-                plt.figure(figsize=(10, 5))
-                plt.plot(range(1, self.epochs + 1), self.train_losses, label='Train Loss')
-                plt.plot(range(1, self.epochs + 1), self.val_losses, label='Validation Loss')
-                plt.xlabel('Epoch')
-                plt.ylabel('Loss')
-                plt.title(f'{self.dataset_name} Autoencoder Training')
-                plt.legend()
-                plt.grid(True)
-                plt.savefig(os.path.join(self.result_dir, f'{self.dataset_name.lower()}_loss.png'))
-                plt.close()
-        
         # Load best model for return
         best_checkpoint = torch.load(os.path.join(self.result_dir, self.model_save_path))
         self.model.load_state_dict(best_checkpoint['model_state_dict'])
